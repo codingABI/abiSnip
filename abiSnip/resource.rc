@@ -1,0 +1,84 @@
+#include "resource.h"
+#include "windows.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDI_ICON ICON "abiSnip.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1, 0, 0, 1
+PRODUCTVERSION 1, 0, 0, 1
+BEGIN
+	BLOCK "StringFileInfo"
+	BEGIN
+		BLOCK "040704b0"
+		BEGIN
+			VALUE "CompanyName", "codingABI"
+			VALUE "FileDescription", "Tool to create screenshots"
+			VALUE "FileVersion", "1.0.0.1"
+			VALUE "InternalName", "abiSnip.exe"
+			VALUE "LegalCopyright", "Copyright (C) 2024 codingABI"
+			VALUE "OriginalFilename", "abiSnip.exe"
+			VALUE "ProductName", "abiSnip"
+			VALUE "ProductVersion", "1.0.0.1"
+		END
+	END
+	BLOCK "VarFileInfo"
+	BEGIN
+		VALUE "Translation", 0x407, 1200
+	END
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table en-US
+//
+
+STRINGTABLE
+BEGIN
+	IDS_APP_TITLE               "abiSnip"
+	IDS_EXIT                    "Exit program"
+	IDS_ABOUT                   "About..."
+	IDS_OPENFOLDER              "Open screenshot folder..."
+	IDS_SCREENSHOT              "Screenshot (5s delayed)"
+	IDS_ERRORCREATING           "Error creating "
+	IDS_ERRORCOPYTOCLIPBOARD    "Could not copy screenshot to clipboard"
+	IDS_HASFAILED               "has failed"
+	IDS_SETFOLDER               "Change folder..."
+	IDS_PROGINFO                "Tool to create screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2024 codingABI"
+	IDS_SAVETOCLIPBOARD         "Save to cipboard"
+	IDS_SAVETOFILE              "Save to file"
+	IDS_NOSAVING                "All output target dísabled"
+	IDS_SELECTFOLDER            "Select folder to save the \nscreenshots:"
+	IDS_CANCELCAPTURE           "Cancel screenshot"
+	IDS_CHANGEFOLDER            "Change folder and retry?"
+END
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table de-DE
+//
+
+LANGUAGE LANG_GERMAN, SUBLANG_GERMAN
+
+STRINGTABLE
+BEGIN
+	IDS_APP_TITLE               "abiSnip"
+	IDS_EXIT                    "Programm beenden"
+	IDS_ABOUT                   "Über..."
+	IDS_OPENFOLDER              "Screenshot-Ordner öffnen..."
+	IDS_SCREENSHOT              "Screenshot (5s verzögert)"
+	IDS_ERRORCREATING           "Fehler beim Erstellen von "
+	IDS_ERRORCOPYTOCLIPBOARD    "Screenshot konnte nicht in die Zwischenablage kopiert werden"
+	IDS_HASFAILED               "ist fehlgeschlagen"
+	IDS_SETFOLDER               "Ordner ändern..."
+	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2024 codingABI"
+	IDS_SAVETOCLIPBOARD         "In Zwischenablage speichern"
+	IDS_SAVETOFILE              "In Datei speichern"
+	IDS_NOSAVING                "Alle Speicherziele sind deaktiviert"
+	IDS_SELECTFOLDER            "Ordner für die Speicherung der \nScreenshots:"
+	IDS_CANCELCAPTURE           "Screenshot abbrechen"
+	IDS_CHANGEFOLDER            "Ordner ändern und wiederholen?"
+END
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID  RT_MANIFEST "abiSnip.manifest"
