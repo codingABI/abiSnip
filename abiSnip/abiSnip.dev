@@ -39,14 +39,14 @@ Build=1
 LanguageID=1033
 CharsetID=1252
 CompanyName=
-FileVersion=1.0.0.1
+FileVersion=1.0.0.2
 FileDescription=Tool to create screenshots
 InternalName=
-LegalCopyright=Copyright (C) 2024 codingABI
+LegalCopyright=Copyright (C) 2025 codingABI
 LegalTrademarks=
 OriginalFilename=abiSnip.exe
 ProductName=abiSnip
-ProductVersion=1.0.0.1
+ProductVersion=1.0.0.2
 AutoIncBuildNr=0
 SyncProduct=1
 

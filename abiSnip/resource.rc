@@ -6,8 +6,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 IDI_ICON ICON "abiSnip.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1, 0, 0, 1
-PRODUCTVERSION 1, 0, 0, 1
+FILEVERSION 1, 0, 0, 2
+PRODUCTVERSION 1, 0, 0, 2
 BEGIN
 	BLOCK "StringFileInfo"
 	BEGIN
@@ -15,12 +15,12 @@ BEGIN
 		BEGIN
 			VALUE "CompanyName", "codingABI"
 			VALUE "FileDescription", "Tool to create screenshots"
-			VALUE "FileVersion", "1.0.0.1"
+			VALUE "FileVersion", "1.0.0.2"
 			VALUE "InternalName", "abiSnip.exe"
-			VALUE "LegalCopyright", "Copyright (C) 2024 codingABI"
+			VALUE "LegalCopyright", "Copyright (C) 2025 codingABI"
 			VALUE "OriginalFilename", "abiSnip.exe"
 			VALUE "ProductName", "abiSnip"
-			VALUE "ProductVersion", "1.0.0.1"
+			VALUE "ProductVersion", "1.0.0.2"
 		END
 	END
 	BLOCK "VarFileInfo"
@@ -44,14 +44,23 @@ BEGIN
 	IDS_ERRORCREATING           "Error creating "
 	IDS_ERRORCOPYTOCLIPBOARD    "Could not copy screenshot to clipboard"
 	IDS_HASFAILED               "has failed"
+END
+
+STRINGTABLE
+BEGIN
 	IDS_SETFOLDER               "Change folder..."
-	IDS_PROGINFO                "Tool to create screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2024 codingABI"
+	IDS_PROGINFO                "Tool to create screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2025 codingABI"
 	IDS_SAVETOCLIPBOARD         "Save to cipboard"
 	IDS_SAVETOFILE              "Save to file"
 	IDS_NOSAVING                "All output target dísabled"
 	IDS_SELECTFOLDER            "Select folder to save the \nscreenshots:"
 	IDS_CANCELCAPTURE           "Cancel screenshot"
 	IDS_CHANGEFOLDER            "Change folder and retry?"
+END
+
+STRINGTABLE
+BEGIN
+	IDS_AUTORUN                 "Start program at logon"
 END
 
 /////////////////////////////////////////////////////////////////////////////
@@ -71,14 +80,23 @@ BEGIN
 	IDS_ERRORCREATING           "Fehler beim Erstellen von "
 	IDS_ERRORCOPYTOCLIPBOARD    "Screenshot konnte nicht in die Zwischenablage kopiert werden"
 	IDS_HASFAILED               "ist fehlgeschlagen"
+END
+
+STRINGTABLE
+BEGIN
 	IDS_SETFOLDER               "Ordner ändern..."
-	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2024 codingABI"
+	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2025 codingABI"
 	IDS_SAVETOCLIPBOARD         "In Zwischenablage speichern"
 	IDS_SAVETOFILE              "In Datei speichern"
 	IDS_NOSAVING                "Alle Speicherziele sind deaktiviert"
 	IDS_SELECTFOLDER            "Ordner für die Speicherung der \nScreenshots:"
 	IDS_CANCELCAPTURE           "Screenshot abbrechen"
 	IDS_CHANGEFOLDER            "Ordner ändern und wiederholen?"
+END
+
+STRINGTABLE
+BEGIN
+	IDS_AUTORUN                 "Programm bei Anmeldung starten"
 END
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID  RT_MANIFEST "abiSnip.manifest"

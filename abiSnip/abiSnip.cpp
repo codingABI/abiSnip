@@ -12,11 +12,13 @@
 			 - Selections can be adjusted by mouse or keyboard
 			 - Folder for PNG files can be set with the context menu of the tray icon
 			 - Filename for a PNG file will be set automatically and contains a timestamp, for example "Screenshot 2024-11-24 100706.png"
+			 - Selection can be pixelated
+			 - Selection can marked with a colored box
 
 			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
   License: CC0
-  Copyright (c) 2024 codingABI
+  Copyright (c) 2025 codingABI
 
   Commands:
   Print screen = Start screenshot
@@ -32,10 +34,12 @@
   Home = Restore selection
   +/- = Increase/decrease selection
   PageUp/PageDown, mouse wheel = Zoom In/Out
-  C = Clipboard On/Off
-  F = File On/Off
+  C = Save to clipboard On/Off
+  F = Save to file On/Off
   S = Alternative colors On/Off
   F1 = Display internal information on screen On/Off
+  P = Pixelate selected area
+  B = Box around selected area
 
   Refs:
   https://learn.microsoft.com/en-us/windows/win32/gdi/capturing-an-image
@@ -44,14 +48,17 @@
   https://devblogs.microsoft.com/oldnewthing/20150406-00/?p=44303
 
   History:
-  20241202, Initial version
-
+  20241202, Initial version 1.0.0.1
+  20250102, Add pixelate selection
+            Add box around selected area
+			Add command line arguments
+			Add autostart at logon option
+			Version update to 1.0.0.2
 ===================================================================+*/
 
 // For GNU compilers
 #if defined (__GNUC__)
 #define UNICODE
-#define NO_SHLWAPI_STRFCNS
 #define _WIN32_WINNT 0x0A00
 #define _MAX_ITOSTR_BASE16_COUNT (8 + 1) // Char length for DWORD to hex conversion
 #endif
@@ -76,7 +83,8 @@
 
 using namespace Gdiplus;
 // Defines
-#define REGISTRYPATH L"Software\\CodingABI\\abiSnip" // Regisry path under HKCU to store program settings
+#define REGISTRYSETTINGPATH L"Software\\CodingABI\\abiSnip" // Regisry path under HKCU to store program settings
+#define REGISTRYRUNPATH L"Software\\Microsoft\\Windows\\CurrentVersion\\Run" // Registry path under HKCU to start the program at logon
 #define ZOOMWIDTH 32 // Width of zoomwindow (effective pixel size is ZOOMWIDTH * current zoom scale)
 #define ZOOMHEIGHT 32 // Height of zoomwindow (effective pixel size is ZOOMHEIGHT * current zoom scale)
 #define MAXZOOMFACTOR 32 // Max zoom scale
@@ -86,10 +94,14 @@ using namespace Gdiplus;
 #define DEFAULTSAVETOFILE TRUE // TRUE, when screenshot should be saved to a PNG file
 #define DEFAULTUSEALTERNATIVECOLORS FALSE // TRUE, when alternative colors are enabled
 #define DEFAULTSHOWDISPLAYINFORMATION FALSE // TRUE, when drawing internal information on screen is enabled
+#define PIXELATEFACTOR 8 // Factor for pixelating an area with key "p"
+#define MARKEDWIDTH 3 // Line width when marking selected area
+#define MARKEDALPHA 128 // Alpha value when marking selected area
 
 // Default colors
 #define APPCOLOR RGB(245, 167, 66)
 #define APPCOLORINV RGB(255,255,255)
+#define MARKCOLOR RGB(255,0,0)
 // Alternative colors
 #define ALTAPPCOLOR RGB(0, 116, 129)
 #define ALTAPPCOLORINV RGB(255,255,255)
@@ -137,11 +149,13 @@ BOOL g_useAlternativeColors = DEFAULTUSEALTERNATIVECOLORS;
 BOOL g_saveToFile = DEFAULTSAVETOFILE;
 BOOL g_saveToClipboard = DEFAULTSAVETOCLIPBOARD;
 BOOL g_displayInternallnformation = DEFAULTSHOWDISPLAYINFORMATION;
+BOOL g_onetimeCapture = FALSE; // TRUE in onetimeCapture mode (capture once at program start and exit program afterwards)
 APPSTATE g_appState = stateTrayIcon; // Current program state
 HWND g_activeWindow = NULL; // Active window before program starts fullscreen mode
 int g_zoomScale = DEFAULTZOOMSCALE; // Zoom scale for mouse cursor
 HHOOK g_hHook = NULL; // Handle to hook (We use keyboard hook to start fullscreen mode, when the "Print screen" key was pressed)
 NOTIFYICONDATA g_nid; // Tray icon structure
+
 
 // Function declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -203,7 +217,6 @@ void ReleaseHook()
 	if (g_hHook != NULL) UnhookWindowsHookEx(g_hHook);
 }
 
-
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: SetForegroundWindowInternal
 
@@ -218,25 +231,25 @@ void ReleaseHook()
 -----------------------------------------------------------------F-F*/
 void SetForegroundWindowInternal(HWND hWindow)
 {
-	if (!::IsWindow(hWindow)) return;
+	if (!IsWindow(hWindow)) return;
 
 	BYTE keyState[256] = { 0 };
 	// To unlock SetForegroundWindow we need to imitate Alt pressing
-	if (::GetKeyboardState((LPBYTE)&keyState))
+	if (GetKeyboardState((LPBYTE)&keyState))
 	{
 		if (!(keyState[VK_MENU] & 0x80))
 		{
-			::keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | 0, 0);
+			keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | 0, 0);
 		}
 	}
 
-	::SetForegroundWindow(hWindow);
+	SetForegroundWindow(hWindow);
 
-	if (::GetKeyboardState((LPBYTE)&keyState))
+	if (GetKeyboardState((LPBYTE)&keyState))
 	{
 		if (!(keyState[VK_MENU] & 0x80))
 		{
-			::keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
+			keybd_event(VK_MENU, 0, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP, 0);
 		}
 	}
 }
@@ -259,6 +272,45 @@ std::wstring LoadStringAsWstr(HINSTANCE hInstance, UINT uID)
 	PCWSTR pws;
 	int cchStringLength = LoadStringW(hInstance, uID, reinterpret_cast<LPWSTR>(&pws), 0);
 	if (cchStringLength > 0) return std::wstring(pws, cchStringLength); else return std::wstring();
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: normalizeRectangle
+
+  Summary:   "normalize" rectangle to ensure, that .left is the left side and .top is on the upper side
+
+  Args:     RECT rect
+			  Rectangle to be normalized
+
+  Returns:  RECT
+  			  Normalized rectangle
+
+-----------------------------------------------------------------F-F*/
+RECT normalizeRectangle(RECT rect) 
+{
+	RECT result = { 0 };
+
+	if (rect.right >= rect.left)
+	{
+		result.left = rect.left;
+		result.right = rect.right;
+	}
+	else
+	{
+		result.left = rect.right;
+		result.right = rect.left;
+	}
+	if (rect.bottom >= rect.top)
+	{
+		result.top = rect.top;
+		result.bottom = rect.bottom;
+	}
+	else
+	{
+		result.top = rect.bottom;
+		result.bottom = rect.top;
+	}
+	return result;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -310,6 +362,71 @@ void showProgramInformation(HWND hWindow)
 	}
 
 	MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_PROGINFO).c_str(), sTitle.c_str(), MB_ICONINFORMATION | MB_OK);
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: showProgramArguments
+
+  Summary:   Show program arguments message box
+
+  Args:     HWND hWindow
+			  Handle to main window
+
+  Returns:
+
+-----------------------------------------------------------------F-F*/
+void showProgramArguments(HWND hWindow)
+{
+	std::wstring sTitle(LoadStringAsWstr(g_hInst, IDS_APP_TITLE));
+	std::wstring sMessage = L"";
+
+	sMessage.assign(L"abisnip.exe [/af] [/ac] [/f] [/s] [/v] [/?]\n")
+		.append(L"/ac Create and save screenshot to clipboard\n")
+		.append(L"/af Create and save screenshot to file\n")
+		.append(L"/f Open screenshot folder\n")
+		.append(L"/s One-time manual screenshot\n")
+		.append(L"/v Show version information\n")
+		.append(L"/? Show this dialog");
+
+	MessageBox(hWindow, sMessage.c_str(), sTitle.c_str(), MB_OK);
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: checkScreenshotTargets
+
+  Summary:   Show warning, if all screenshot targets are disabled
+
+  Args:
+
+  Returns:
+
+-----------------------------------------------------------------F-F*/
+void checkScreenshotTargets(HWND hWindow) {
+	if (!g_saveToClipboard && !g_saveToFile) // Clipboard and file was disabled by user => Warning
+	{
+		if (g_appState != stateTrayIcon) ShowCursor(true);
+		MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_NOSAVING).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
+		if (g_appState != stateTrayIcon) ShowCursor(false);
+	}
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: isSelectionValid
+
+  Summary:   Checks if selected area is valid
+
+  Args:     RECT rect
+ 			  Selection rectangle
+
+  Returns:	BOOL
+  			  TRUE = valid
+  			  FALSE = not valid
+
+-----------------------------------------------------------------F-F*/
+BOOL isSelectionValid(RECT rect)
+{
+	if ((rect.left == -1) || (rect.right == -1) || (rect.top == -1) || (rect.bottom == -1)) return FALSE;
+	return TRUE;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -383,7 +500,7 @@ DWORD getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
 	LONG lResult;
 
 	// Open registry value
-	lResult = RegOpenKeyEx(HKEY_CURRENT_USER, REGISTRYPATH, 0, KEY_READ, &hKey);
+	lResult = RegOpenKeyEx(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, 0, KEY_READ, &hKey);
 	if (lResult == ERROR_SUCCESS) {
 
 		// Read value from registry
@@ -474,7 +591,7 @@ BOOL storeDWORDSettingInRegistry(APPDWORDSETTINGS setting, DWORD dwValue) {
 	LONG lResult;
 
 	// Open registry value
-	lResult = RegCreateKeyEx(HKEY_CURRENT_USER, REGISTRYPATH, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL);
+	lResult = RegCreateKeyEx(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL);
 	if (lResult == ERROR_SUCCESS) {
 
 		// Write to registry
@@ -486,6 +603,94 @@ BOOL storeDWORDSettingInRegistry(APPDWORDSETTINGS setting, DWORD dwValue) {
 		RegCloseKey(hKey);
 	}
 	return bResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: setRunRegistryValue
+
+  Summary:   Set or delete registry run value to run the program at logon
+
+  Args:		BOOL enalbed
+  			  TRUE = Enable program start at logon
+  			  FALSE = Disable program start at logon
+
+  Returns:	
+
+-----------------------------------------------------------------F-F*/
+void setRunRegistryValue(BOOL enabled)
+{
+	wchar_t szProgramPath[MAX_PATH] = L"";
+	wchar_t szProgramPathQuoted[MAX_PATH] = L"";
+
+	if (!enabled) 
+	{ // Delete run key value
+		HKEY hKey = NULL;
+		if (RegOpenKeyEx(HKEY_CURRENT_USER, REGISTRYRUNPATH, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+			RegDeleteValue(hKey,LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
+		}
+	}
+	else
+	{ // Create run key value
+		if (GetModuleFileName(NULL, szProgramPath, MAX_PATH) > 0)
+		{
+			_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c",L'"',szProgramPath,L'"'); // Quote string
+			RegSetKeyValue(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), REG_SZ, szProgramPathQuoted, (DWORD)(wcslen(szProgramPathQuoted) + 1) * sizeof(WCHAR));
+
+		}
+	}	
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: getRunRegistryValue
+
+  Summary:   Gets registry run value to run the program at logon
+
+  Args:
+
+  Returns:	BOOL
+  			  TRUE = Program start at logon is enabled
+  			  FALSE = Program start at logon is disabled  
+
+-----------------------------------------------------------------F-F*/
+bool getRunRegistryValue()
+{
+	wchar_t szValue[MAX_PATH];
+	szValue[0] = L'\0';
+	DWORD valueSize = 0;
+	DWORD keyType = 0;
+
+	// Get size of registry value
+	if (RegGetValue(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), RRF_RT_REG_SZ, &keyType, NULL, &valueSize) == ERROR_SUCCESS)
+	{
+		if ((valueSize > 0) && (valueSize <= (MAX_PATH + 1) * sizeof(WCHAR))) // Size OK?
+		{
+			// Get registry value
+			valueSize = MAX_PATH * sizeof(WCHAR); // Max size incl. termination
+			if (RegGetValue(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, &szValue, &valueSize) == ERROR_SUCCESS)
+			{
+				wchar_t szProgramPath[MAX_PATH];
+				wchar_t szProgramPathQuoted[MAX_PATH];
+				if (GetModuleFileName(NULL, szProgramPath, MAX_PATH) > 0)
+				{
+					_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c",L'"',szProgramPath,L'"'); // Quote string	
+					if (_wcsicmp(szValue,szProgramPathQuoted) != 0) setRunRegistryValue(TRUE); // Fix invalid registry value
+				}
+			}
+			else
+			{
+				szValue[0] = L'\0';
+			}
+		}
+	}
+
+	if (wcslen(szValue) > 0)
+	{
+		return TRUE;
+	}
+	else
+	{ 
+		return FALSE;
+	}
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -509,13 +714,13 @@ std::wstring getScreenshotPathFromRegistry()
 	DWORD valueSize = 0;
 	DWORD keyType = 0;
 	// Get size of registry value
-	if (RegGetValue(HKEY_CURRENT_USER, REGISTRYPATH, L"screenshotPath", RRF_RT_REG_SZ, &keyType, NULL, &valueSize) == ERROR_SUCCESS)
+	if (RegGetValue(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, L"screenshotPath", RRF_RT_REG_SZ, &keyType, NULL, &valueSize) == ERROR_SUCCESS)
 	{
 		if ((valueSize > 0) && (valueSize <= (MAX_PATH + 1) * sizeof(WCHAR))) // Size OK?
 		{
 			// Get registry value
 			valueSize = MAX_PATH * sizeof(WCHAR); // Max size incl. termination
-			if (RegGetValue(HKEY_CURRENT_USER, REGISTRYPATH, L"screenshotPath", RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, &szValue, &valueSize) != ERROR_SUCCESS)
+			if (RegGetValue(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, L"screenshotPath", RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, &szValue, &valueSize) != ERROR_SUCCESS)
 			{
 				szValue[0] = L'\0';
 			}
@@ -594,7 +799,7 @@ void changeScreenshotPathAndStorePathToRegistry()
 		WCHAR szPath[MAX_PATH];
 		if (SHGetPathFromIDList(pidlSelected, szPath))
 		{
-			RegSetKeyValue(HKEY_CURRENT_USER, REGISTRYPATH, L"screenshotPath", REG_SZ, szPath, (DWORD)(wcslen(szPath) + 1) * sizeof(WCHAR));
+			RegSetKeyValue(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, L"screenshotPath", REG_SZ, szPath, (DWORD)(wcslen(szPath) + 1) * sizeof(WCHAR));
 		}
 		CoTaskMemFree(pidlSelected);
 	}
@@ -736,10 +941,11 @@ int limitXtoBitmap(int X) {
 	if (g_hBitmap == NULL) return X;
 
 	BITMAP bm;
-	GetObject(g_hBitmap, sizeof(bm), &bm);
-
-	if (X < 0) return 0;
-	if (X > bm.bmWidth - 1) return bm.bmWidth - 1;
+	if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0)
+	{
+		if (X < 0) return 0;
+		if (X > bm.bmWidth - 1) return bm.bmWidth - 1;
+	}
 	return X;
 }
 
@@ -758,10 +964,11 @@ int limitYtoBitmap(int Y) {
 	if (g_hBitmap == NULL) return Y;
 
 	BITMAP bm;
-	GetObject(g_hBitmap, sizeof(bm), &bm);
-
-	if (Y < 0) return 0;
-	if (Y > bm.bmHeight - 1) return bm.bmHeight - 1;
+	if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0)
+	{
+		if (Y < 0) return 0;
+		if (Y > bm.bmHeight - 1) return bm.bmHeight - 1;
+	}
 	return Y;
 }
 
@@ -776,8 +983,8 @@ int limitYtoBitmap(int Y) {
 			  Filename for PNG file
 
   Returns:	BOOL
-			  TRUE = Success
-			  FALSE = Error
+			  TRUE = success
+			  FALSE = failure
 
 -----------------------------------------------------------------F-F*/
 BOOL SaveBitmapAsPNG(HBITMAP hBitmap, const WCHAR* fileName)
@@ -856,68 +1063,62 @@ BOOL SaveBitmapAsPNG(HBITMAP hBitmap, const WCHAR* fileName)
   Args:     HWND hWindow
 			  Handle to window
 
-  Returns:
+  Returns:	BOOL
+  			  TRUE = success
+  			  FALSE = failure
 
 -----------------------------------------------------------------F-F*/
-void saveSelection(HWND hWindow)
+BOOL saveSelection(HWND hWindow)
 {
-	HDC hdcMemFullScreen = NULL;
-	HDC hdcMemSelection = NULL;
-	HBITMAP hOldBitmapFullScreen = NULL;
-	HBITMAP hOldBitmapSelection = NULL;
+	HDC hdcScreenshot = NULL;
+	HDC hdcSelection = NULL;
+	HGDIOBJ hbmScreenshotOld = NULL;
+	HGDIOBJ hbmSelectionOld = NULL;	
 	HBITMAP hBitmap = NULL;
-
+	BOOL bResult = TRUE; 
 	RECT finalSelection;
-
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
+	std::wstring sMessage = L"";
+	int selectionWidth = 0;
+	int selectionHeight = 0;
+		
 	// Retrieves information the entire screenshot bitmap
 	BITMAP bm;
-	GetObject(g_hBitmap, sizeof(bm), &bm);
+	if (GetObject(g_hBitmap, sizeof(bm), &bm) == 0) goto FAIL;
 
-	// Normalize selected rectangle
-	if (g_selection.left < g_selection.right) {
-		finalSelection.left = g_selection.left;
-		finalSelection.right = g_selection.right;
-	}
-	else
-	{
-		finalSelection.left = g_selection.right;
-		finalSelection.right = g_selection.left;
-	}
-	if (g_selection.top < g_selection.bottom) {
-		finalSelection.top = g_selection.top;
-		finalSelection.bottom = g_selection.bottom;
-	}
-	else
-	{
-		finalSelection.top = g_selection.bottom;
-		finalSelection.bottom = g_selection.top;
-	}
+	finalSelection = normalizeRectangle(g_selection);
+
 	if (finalSelection.left < 0) finalSelection.left = 0;
 	if (finalSelection.right > bm.bmWidth - 1) finalSelection.right = bm.bmWidth - 1;
 	if (finalSelection.top < 0) finalSelection.top = 0;
 	if (finalSelection.bottom > bm.bmHeight - 1) finalSelection.bottom = bm.bmHeight - 1;
 
-	int selectionWidth = finalSelection.right - finalSelection.left + 1;
-	int selectionHeight = finalSelection.bottom - finalSelection.top + 1;
+	selectionWidth = finalSelection.right - finalSelection.left + 1;
+	selectionHeight = finalSelection.bottom - finalSelection.top + 1;
 
 	// Copy selected area from entire screenshot to new bitmap
-	hdcMemFullScreen = CreateCompatibleDC(NULL);
-	if (hdcMemFullScreen == NULL) goto CLEANUP;
+	hdcScreenshot = CreateCompatibleDC(NULL);
+	if (hdcScreenshot == NULL) goto FAIL;
 
-	hOldBitmapFullScreen = (HBITMAP)SelectObject(hdcMemFullScreen, g_hBitmap);
-	if (hOldBitmapFullScreen == NULL) goto CLEANUP;
+	hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
+	if (hbmScreenshotOld == NULL) goto FAIL;
 
-	hdcMemSelection = CreateCompatibleDC(NULL);
-	if (hdcMemSelection == NULL) goto CLEANUP;
+	hdcSelection = CreateCompatibleDC(NULL);
+	if (hdcSelection == NULL) goto FAIL;
 
-	hBitmap = CreateCompatibleBitmap(hdcMemFullScreen, selectionWidth, selectionHeight);
-	if (hBitmap == NULL) goto CLEANUP;
+	hBitmap = CreateCompatibleBitmap(hdcScreenshot, selectionWidth, selectionHeight);
+	if (hBitmap == NULL)
+	{
+		sMessage.assign(L"CreateCompatibleBitmap@saveSelection ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
 
-	hOldBitmapSelection = (HBITMAP)SelectObject(hdcMemSelection, hBitmap);
-	if (hOldBitmapSelection == NULL) goto CLEANUP;
+	hbmSelectionOld = SelectObject(hdcSelection, hBitmap);
+	if (hbmSelectionOld == NULL) goto FAIL;
 
-	if (BitBlt(hdcMemSelection, 0, 0, selectionWidth, selectionHeight,
-		hdcMemFullScreen, finalSelection.left, finalSelection.top, SRCCOPY))
+	if (BitBlt(hdcSelection, 0, 0, selectionWidth, selectionHeight,
+		hdcScreenshot, finalSelection.left, finalSelection.top, SRCCOPY))
 	{
 		if (g_saveToFile) // Save selected area to file?
 		{
@@ -953,35 +1154,42 @@ void saveSelection(HWND hWindow)
 			}
 		}
 
-		if (!g_saveToClipboard && !g_saveToFile) // Clipboard and file was disabled by user => Warning
-		{
-			MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_NOSAVING).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
-		}
-
+		checkScreenshotTargets(hWindow);
 	}
 	else
 	{
 		// BitBlt error
-		std::wstring sMessage;
-		sMessage.assign(L"BitBlt ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
-		MessageBox(hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
+		_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());
+		sMessage.assign(L"BitBlt@saveSelection ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+			.append(L" ")
+			.append(szHex);
+		goto FAIL;
 	}
 
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"saveSelection fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"saveSelection ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
 CLEANUP:
 	// Free resources/Cleanup
 	if (hBitmap != NULL) DeleteObject(hBitmap);
 
-	if (hdcMemSelection != NULL)
+	if (hdcSelection != NULL)
 	{
-		if (hOldBitmapSelection != NULL) SelectObject(hdcMemSelection, hOldBitmapSelection);
-		DeleteDC(hdcMemSelection);
+		if (hbmSelectionOld != NULL) SelectObject(hdcSelection, hbmSelectionOld);
+		DeleteDC(hdcSelection);
 	}
 
-	if (hdcMemFullScreen != NULL)
+	if (hdcScreenshot != NULL)
 	{
-		if (hOldBitmapFullScreen != NULL) SelectObject(hdcMemFullScreen, hOldBitmapFullScreen);
-		DeleteDC(hdcMemFullScreen);
+		if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
+		DeleteDC(hdcScreenshot);
 	}
+	return bResult;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -989,17 +1197,19 @@ CLEANUP:
 
   Summary:   Creates zoom boxes for mouse position or point A/B
 
-  Args:     HDC hdc
-			  Handle to drawing context for the window client area
-			HDC hdcMemoryDevice
-			  Handle to drawing context for the buffer
+  Args:     HDC hdcOutputBuffer
+			  Handle to drawing context for the output buffer
+			HDC hdcScreenshot
+			  Handle to drawing context for the screenshot
 			BOXTYPE boxType
 			  Type of position (BoxFirstPointA, BoxFinalPointA, BoxFinalPointB)
 
-  Returns:
+  Returns:	BOOL
+  			  TRUE = success
+  			  TRUE = failure
 
 -----------------------------------------------------------------F-F*/
-void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
+BOOL zoomMousePosition(HDC hdcOutputBuffer, HDC hdcScreenshot, BOXTYPE boxType)
 {
 #define MAXSTRDATAZOOM 30
 	wchar_t strData[MAXSTRDATAZOOM];
@@ -1010,20 +1220,28 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 	HGDIOBJ hfnt = NULL, hfntPrev = NULL;
 	HBRUSH hBrush = NULL;
 	int zoomCenterX, zoomCenterY, zoomBoxX, zoomBoxY;
+	BOOL bResult = TRUE;
+	std::wstring sMessage = L"";
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
 
-	if ((boxType != BoxFirstPointA) && (abs(g_selection.right - g_selection.left) < ZOOMWIDTH * g_zoomScale)) return; // Selection too small
-	if ((boxType != BoxFirstPointA) && (abs(g_selection.bottom - g_selection.top) < ZOOMHEIGHT * g_zoomScale)) return; // Selection too small
+	if ((boxType != BoxFirstPointA) && (abs(g_selection.right - g_selection.left) < ZOOMWIDTH * g_zoomScale)) goto CLEANUP; // Selection too small
+	if ((boxType != BoxFirstPointA) && (abs(g_selection.bottom - g_selection.top) < ZOOMHEIGHT * g_zoomScale)) goto CLEANUP; // Selection too small
 
 	// Font
 	// Specify a font typeface name and weight.
-	if (plf == NULL) goto CLEANUP;
-	if (_snwprintf_s(plf->lfFaceName, 12, _TRUNCATE, L"%s", DEFAULTFONT) < 0) goto CLEANUP;
+	if (plf == NULL) goto FAIL;
+	if (_snwprintf_s(plf->lfFaceName, 12, _TRUNCATE, L"%s", DEFAULTFONT) < 0) goto FAIL;
 	plf->lfWeight = FW_NORMAL;
 	hfnt = CreateFontIndirect(plf);
-	if (hfnt == NULL) goto CLEANUP;
+	if (hfnt == NULL) 
+	{
+		sMessage.assign(L"CreateFontIndirect@zoomMousePosition ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
 
-	hfntPrev = SelectObject(hdcMemoryDevice, hfnt);
-	if (hfntPrev == NULL) goto CLEANUP;
+	hfntPrev = SelectObject(hdcOutputBuffer, hfnt);
+	if (hfntPrev == NULL) goto FAIL;
 
 	switch (boxType)
 	{
@@ -1082,19 +1300,18 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 	// Zoom bitmap
 	if (g_hBitmap != NULL)
 	{
-		HDC hdcMem = CreateCompatibleDC(hdc);
-		if (hdcMem == NULL) return;
-		HGDIOBJ hbmOld = SelectObject(hdcMem, g_hBitmap);
 		BITMAP bm;
-		GetObject(g_hBitmap, sizeof(BITMAP), (PSTR)&bm);
-		SetStretchBltMode(hdcMemoryDevice, COLORONCOLOR);
+		if (GetObject(g_hBitmap, sizeof(BITMAP), (PSTR)&bm) == 0) goto FAIL;
+		SetStretchBltMode(hdcOutputBuffer, COLORONCOLOR);
 
-		StretchBlt(hdcMemoryDevice, zoomBoxX, zoomBoxY, ZOOMWIDTH * g_zoomScale, ZOOMHEIGHT * g_zoomScale,
-			hdcMem, zoomCenterX - ZOOMWIDTH / 2, zoomCenterY - ZOOMHEIGHT / 2, ZOOMWIDTH, ZOOMHEIGHT, SRCCOPY); // SRCCOPY) ;
-
-		SelectObject(hdcMem, hbmOld);
-		DeleteDC(hdcMem);
-	}
+		if (!StretchBlt(hdcOutputBuffer, zoomBoxX, zoomBoxY, ZOOMWIDTH * g_zoomScale, ZOOMHEIGHT * g_zoomScale,
+			hdcScreenshot, zoomCenterX - ZOOMWIDTH / 2, zoomCenterY - ZOOMHEIGHT / 2, ZOOMWIDTH, ZOOMHEIGHT, SRCCOPY)) 
+		{
+			sMessage.assign(L"StretchBlt@zoomMousePosition ")
+				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+			goto FAIL;
+		}
+	} else goto FAIL;
 
 	// Frame
 	RECT outer;
@@ -1103,9 +1320,9 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 	outer.right = zoomBoxX + ZOOMWIDTH * g_zoomScale + 1;
 	outer.bottom = zoomBoxY + ZOOMHEIGHT * g_zoomScale + 1;
 	hBrush = CreateSolidBrush(g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
-	if (hBrush == NULL) goto CLEANUP;
+	if (hBrush == NULL) goto FAIL;
 
-	if (g_zoomScale > 1) FrameRect(hdcMemoryDevice, &outer, hBrush);
+	if (g_zoomScale > 1) FrameRect(hdcOutputBuffer, &outer, hBrush);
 
 	// Cross
 	if (boxType == BoxFirstPointA)
@@ -1116,14 +1333,14 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 		center.right = zoomBoxX + ZOOMWIDTH * g_zoomScale + 1;
 		center.bottom = center.top + g_zoomScale + 2;
 
-		FrameRect(hdcMemoryDevice, &center, hBrush);
+		FrameRect(hdcOutputBuffer, &center, hBrush);
 
 		center.left = zoomBoxX + g_zoomScale * ZOOMWIDTH / 2 - 1;
 		center.top = zoomBoxY - 1;
 		center.right = center.left + g_zoomScale + 2;
 		center.bottom = zoomBoxY + ZOOMHEIGHT * g_zoomScale + 1;
 
-		FrameRect(hdcMemoryDevice, &center, hBrush);
+		FrameRect(hdcOutputBuffer, &center, hBrush);
 	}
 
 	// Text position X
@@ -1201,8 +1418,8 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 		rectText.right = rectText.left;
 	}
 
-	SetTextColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
-	DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | textFormat);
+	SetTextColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
+	DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | textFormat);
 
 	// Text for zoom scale
 	textFormat = 0;
@@ -1277,14 +1494,14 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 		rectText.right = rectText.left;
 	}
 
-	SetBkMode(hdcMemoryDevice, TRANSPARENT);
-	SetTextColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
-	if (g_zoomScale > 1) DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | textFormat);
+	SetBkMode(hdcOutputBuffer, TRANSPARENT);
+	SetTextColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
+	if (g_zoomScale > 1) DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | textFormat);
 
 	// Pointer selection
-	SetTextColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
-	SetBkColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
-	SetBkMode(hdcMemoryDevice, OPAQUE);
+	SetTextColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
+	SetBkColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
+	SetBkMode(hdcOutputBuffer, OPAQUE);
 
 	_snwprintf_s(strData, MAXSTRDATAZOOM, _TRUNCATE, L"");
 	textFormat = 0;
@@ -1349,18 +1566,24 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 		break;
 	}
 
-	if (wcslen(strData) > 0) DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | textFormat);
+	if (wcslen(strData) > 0) DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | textFormat);
 
 	// Text position Y
 
 	// Text rotated 90 degree
-	SelectObject(hdc, hfntPrev);
+	SelectObject(hdcOutputBuffer, hfntPrev);
 	DeleteObject(hfnt);
 	plf->lfEscapement = 900; // 90 degree, does not work with lfFaceName "System"
 	hfnt = CreateFontIndirect(plf);
-	if (hfnt == NULL) goto CLEANUP;
+	if (hfnt == NULL) 
+	{
+		sMessage.assign(L"CreateFontIndirect@zoomMousePosition ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
 
-	hfntPrev = SelectObject(hdcMemoryDevice, hfnt);
+	hfntPrev = SelectObject(hdcOutputBuffer, hfnt);
+	if (hfntPrev == NULL) goto FAIL;
 
 	textFormat = 0;
 	textPosition = { 0, 0 };
@@ -1376,7 +1599,7 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 		break;
 	}
 	// DT_CALCRECT does not like lfEscapement != 0 => Calculate position later
-	DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CALCRECT);
+	DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CALCRECT);
 
 	switch (boxType)
 	{
@@ -1425,15 +1648,25 @@ void zoomMousePosition(HDC hdc, HDC hdcMemoryDevice, BOXTYPE boxType)
 	rectText.left = textPosition.x;
 	rectText.top = textPosition.y;
 
-	DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP);
+	DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP);
+	
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"zoomMousePosition fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"zoomMousePosition ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(g_hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
 
 CLEANUP:
 	// Free resources/Cleanup
-	if (hfntPrev != NULL) SelectObject(hdcMemoryDevice, hfntPrev);
+	if (hfntPrev != NULL) SelectObject(hdcOutputBuffer, hfntPrev);
 
 	if (hfnt != NULL) DeleteObject(hfnt);
 	if (plf != NULL) LocalFree((LOCALHANDLE)plf);
 	if (hBrush != NULL) DeleteObject(hBrush);
+
+	return bResult;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1479,6 +1712,243 @@ void OnMouseMove(HWND hWindow, int pixelX, int pixelY, DWORD flags) {
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: pixelateScreenshotRect
+
+  Summary:   Pixelate rectangle area on screenshot
+
+  Args:     RECT rect
+              Rectangle area
+            DWORD blockSize
+              "Target pixel size"
+
+  Returns:  BOOL
+  			  TRUE = success
+  			  FALSE = failure
+
+-----------------------------------------------------------------F-F*/
+BOOL pixelateScreenshotRect(RECT rect, DWORD blockSize) {
+	HDC hdcScreenshot = NULL;
+	HDC hdcPixelated = NULL;
+	HBITMAP hBitmapPixelated = NULL;
+	RECT rectPixelated = { -1, -1, -1, -1 };
+	HGDIOBJ hbmPixelatedOld = NULL;
+	HGDIOBJ hbmScreenshotOld = NULL;
+	BOOL bResult = TRUE;
+	std::wstring sMessage = L"";
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
+
+	if (g_hBitmap == NULL) goto FAIL;
+
+	if (!isSelectionValid(rect)) goto FAIL;
+
+	rectPixelated=normalizeRectangle(rect);
+
+	hdcScreenshot = CreateCompatibleDC(NULL);
+	if (hdcScreenshot == NULL) goto FAIL;
+
+	hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
+	if (hbmScreenshotOld == NULL) goto FAIL;
+
+	hdcPixelated = CreateCompatibleDC(hdcScreenshot);
+	if (hdcPixelated == NULL) goto FAIL;
+
+	hBitmapPixelated = CreateCompatibleBitmap(hdcScreenshot,(rectPixelated.right-rectPixelated.left +1)/blockSize,(rectPixelated.bottom-rectPixelated.top +1)/blockSize);
+	if (hBitmapPixelated == NULL) 
+	{
+		sMessage.assign(L"CreateCompatibleBitmap@pixelateScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
+
+	hbmPixelatedOld = SelectObject(hdcPixelated, hBitmapPixelated);
+	if (hbmPixelatedOld == NULL) goto FAIL;
+
+	SetStretchBltMode(hdcPixelated, HALFTONE);
+	SetStretchBltMode(hdcScreenshot, COLORONCOLOR);
+
+	// Create reduced pixels for selected area
+	if (!StretchBlt(hdcPixelated, 0, 0, (rectPixelated.right-rectPixelated.left +1)/blockSize,
+		(rectPixelated.bottom-rectPixelated.top +1)/blockSize,
+		hdcScreenshot, rectPixelated.left, rectPixelated.top, rectPixelated.right-rectPixelated.left +1,
+		rectPixelated.bottom-rectPixelated.top +1, SRCCOPY))
+	{
+		sMessage.assign(L"StretchBlt@pixelateScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;	
+	}
+
+	// Copy  back to screenshot => pixelated
+	if (!StretchBlt(hdcScreenshot, rectPixelated.left, rectPixelated.top, rectPixelated.right-rectPixelated.left +1,
+		rectPixelated.bottom-rectPixelated.top +1,
+		hdcPixelated, 0, 0, (rectPixelated.right-rectPixelated.left +1)/blockSize,
+		(rectPixelated.bottom-rectPixelated.top +1)/blockSize, SRCCOPY)) 
+	{
+		sMessage.assign(L"StretchBlt@pixelateScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"pixelateScreenshotRect fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"pixelateScreenshotRect ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(g_hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
+CLEANUP:
+	// Free resources/Cleanup
+	if (hbmPixelatedOld != NULL) SelectObject(hdcPixelated, hbmPixelatedOld);
+	if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
+
+	if (hBitmapPixelated != NULL) DeleteObject(hBitmapPixelated);
+
+	if (hdcPixelated != NULL) DeleteDC(hdcPixelated);
+	if (hdcScreenshot != NULL) DeleteDC(hdcScreenshot);
+	return bResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: markScreenshotRect
+
+  Summary:   Draw line around rectangle area of screenshot
+
+  Args:     RECT rect
+              Rectangle area
+            int lineWidth
+              Width of line
+            BYTE blendAlpha
+              Alpha value for line
+
+  Returns:  BOOL
+  			  TRUE = success
+  			  FALSE = failure
+
+-----------------------------------------------------------------F-F*/
+bool markScreenshotRect(RECT rect, int lineWidth, BYTE blendAlpha) {
+	HDC hdcScreenshot = NULL;
+	HDC hdcInner = NULL;
+	HDC hdcOuter = NULL;
+	HBITMAP hBitmapOuter = NULL;
+	HBITMAP hBitmapInner = NULL;
+	HGDIOBJ hbmInnerOld = NULL;
+	HGDIOBJ hbmOuterOld = NULL;
+	HGDIOBJ hbmScreenshotOld = NULL;
+	HBRUSH hBrush = NULL;
+	RECT frame = { 0 };
+	RECT inner { 0 }, outer { 0 };
+	BLENDFUNCTION blendFunc;
+	BOOL bResult = TRUE;
+	std::wstring sMessage = L"";
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
+	
+	if (g_hBitmap == NULL) goto FAIL;
+
+	if (lineWidth < 1) goto FAIL;
+
+	if (!isSelectionValid(rect)) goto FAIL;
+
+	inner=normalizeRectangle(rect);
+	outer = inner;
+	InflateRect(&inner,-(lineWidth/2+1),-(lineWidth/2+1));
+	InflateRect(&outer,lineWidth/2,lineWidth/2);
+
+	// hdc for screenshot bitmap
+	hdcScreenshot = CreateCompatibleDC(NULL);
+	if (hdcScreenshot == NULL) goto FAIL;
+
+	hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
+	if (hbmScreenshotOld == NULL) goto FAIL;
+
+	// Copy inner of marked screenshot area to buffer
+	hdcInner = CreateCompatibleDC(hdcScreenshot);
+	if (hdcInner == NULL) goto FAIL;
+
+	hBitmapInner = CreateCompatibleBitmap(hdcScreenshot,inner.right-inner.left+1,inner.bottom-inner.top+1);
+	if (hBitmapInner == NULL) 
+	{
+		sMessage.assign(L"CreateCompatibleBitmap@markScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
+
+	hbmInnerOld = SelectObject(hdcInner, hBitmapInner);
+	if (hbmInnerOld == NULL) goto FAIL;
+
+	if (!BitBlt(hdcInner, 0, 0, inner.right-inner.left+1, inner.bottom-inner.top+1,
+		hdcScreenshot, inner.left, inner.top, SRCCOPY)) goto FAIL;
+
+	// Blend colored frame over outer of marked screenshot area
+	hdcOuter = CreateCompatibleDC(hdcScreenshot);
+	if (hdcOuter == NULL) goto FAIL;
+
+	hBitmapOuter = CreateCompatibleBitmap(hdcScreenshot,outer.right-outer.left+1,outer.bottom-outer.top+1);
+	if (hBitmapOuter == NULL) 
+	{
+		sMessage.assign(L"CreateCompatibleBitmap@markScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
+
+	hbmOuterOld = SelectObject(hdcOuter, hBitmapOuter);
+	if (hbmOuterOld == NULL) goto FAIL;
+
+	hBrush = CreateSolidBrush(MARKCOLOR);
+	if (hBrush == NULL) goto CLEANUP;
+	frame.right = outer.right - outer.left + 1;
+	frame.bottom = outer.bottom - outer.top + 1;
+	FillRect(hdcOuter,&frame,hBrush);
+
+	blendFunc.BlendOp = AC_SRC_OVER;
+	blendFunc.BlendFlags = 0;
+	blendFunc.SourceConstantAlpha = blendAlpha;
+	blendFunc.AlphaFormat = 0;
+
+	if (!AlphaBlend(hdcScreenshot, outer.left, outer.top,
+		outer.right-outer.left+1,
+		outer.bottom-outer.top+1,
+	 	hdcOuter, 0, 0, outer.right-outer.left+1, outer.bottom-outer.top+1, blendFunc)) 
+	{
+		sMessage.assign(L"AlphaBlend@markScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;	
+	}
+
+	// Copy inner area back from buffer to screenshot
+	if (!BitBlt(hdcScreenshot, inner.left, inner.top, inner.right-inner.left+1, inner.bottom-inner.top+1,
+		hdcInner, 0, 0 , SRCCOPY)) 
+	{
+		_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());
+		sMessage.assign(L"BitBlt@markScreenshotRect ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+			.append(L" ")
+			.append(szHex);
+		goto FAIL;
+	}
+	
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"markScreenshotRect fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"markScreenshotRect ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(g_hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
+CLEANUP:
+	// Free resources/Cleanup
+	if (hBrush != NULL) DeleteObject(hBrush);
+
+	if (hbmOuterOld != NULL) SelectObject(hdcOuter, hbmOuterOld);
+	if (hbmInnerOld != NULL) SelectObject(hdcInner, hbmInnerOld);
+	if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
+
+	if (hBitmapOuter != NULL) DeleteObject(hBitmapOuter);
+	if (hBitmapInner != NULL) DeleteObject(hBitmapInner);
+
+	if (hdcOuter != NULL) DeleteDC(hdcOuter);
+	if (hdcInner != NULL) DeleteDC(hdcInner);
+	if (hdcScreenshot != NULL) DeleteDC(hdcScreenshot);
+	return bResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: OnPaint
 
   Summary:   Redraw main window
@@ -1486,15 +1956,18 @@ void OnMouseMove(HWND hWindow, int pixelX, int pixelY, DWORD flags) {
   Args:     HWND hWindow
 			  Handle to window
 
-  Returns:
+  Returns:  BOOL
+  			  TRUE = success
+  			  FALSE = failure
 
 -----------------------------------------------------------------F-F*/
-void OnPaint(HWND hWindow) {
+BOOL OnPaint(HWND hWindow) {
 	PAINTSTRUCT ps;
 	RECT rect;
-	HDC hdcMemScreenshot = NULL;
-	HBITMAP bmBuffer = NULL;
-	int iBackupDC = 0;
+	HDC hdcScreenshot = NULL;
+	HGDIOBJ hbmScreenshotOld = NULL;
+	HBITMAP bmOutputBuffer = NULL;
+	int iBackupOutputDC = 0;
 	HBRUSH hBrushForeground = NULL;
 	HBRUSH hBrushBackground = NULL;
 #define MAXSTRDATA 128
@@ -1504,19 +1977,21 @@ void OnPaint(HWND hWindow) {
 	RECT inner, outer;
 	RECT rectText{ 0, 0, 0, 0 };
 	HDC hdc = NULL;
-	HDC hdcMemoryDevice = NULL;
+	HDC hdcOutputBuffer = NULL;
 	int iWidth = 0;
 	int iHeight = 0;
 	UINT textFormat = 0;
 	std::wstring sDisplayInfos;
 	COLORREF color;
-	HGDIOBJ hOldGDIObj = NULL;
-
+	BOOL bResult = TRUE;
+	std::wstring sMessage = L"";
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
+	
 	hdc = BeginPaint(hWindow, &ps);
-	if (hdc == NULL) goto CLEANUP;
-	if (plf == NULL) goto CLEANUP;
-	if (g_appState == stateTrayIcon) goto CLEANUP;
-	if (g_hBitmap == NULL) goto CLEANUP;
+	if (hdc == NULL) goto FAIL;
+	if (plf == NULL) goto FAIL;
+	if (g_appState == stateTrayIcon) goto FAIL;
+	if (g_hBitmap == NULL) goto FAIL;
 
 	GetClientRect(hWindow, &rect);
 
@@ -1524,38 +1999,49 @@ void OnPaint(HWND hWindow) {
 	iHeight = rect.bottom + 1;
 
 	// Create buffer memory device (Used as painting target and will be copied after the last painting to the display)
-	hdcMemoryDevice = CreateCompatibleDC(hdc);
-	if (hdcMemoryDevice == NULL) goto CLEANUP;
+	hdcOutputBuffer = CreateCompatibleDC(hdc);
+	if (hdcOutputBuffer == NULL) goto FAIL;
 
 	// Bitmap in buffer memory
-	bmBuffer = CreateCompatibleBitmap(hdc, iWidth, iHeight);
-	if (bmBuffer == NULL) goto CLEANUP;
+	bmOutputBuffer = CreateCompatibleBitmap(hdc, iWidth, iHeight);
+	if (bmOutputBuffer == NULL) 
+	{
+		sMessage.assign(L"CreateCompatibleBitmap@OnPaint ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
 
 	// Backup memory device context state
-	iBackupDC = SaveDC(hdcMemoryDevice);
-
+	iBackupOutputDC = SaveDC(hdcOutputBuffer);
+	if (iBackupOutputDC == 0) goto FAIL;
+	
 	// Font
 	// Specify a font typeface name and weight.
-	if (_snwprintf_s(plf->lfFaceName, 12, _TRUNCATE, L"%s", DEFAULTFONT) < 0) goto CLEANUP;
+	if (_snwprintf_s(plf->lfFaceName, 12, _TRUNCATE, L"%s", DEFAULTFONT) < 0) goto FAIL;
 
 	plf->lfWeight = FW_NORMAL;
 	hfnt = CreateFontIndirect(plf);
-	if (hfnt == NULL) goto CLEANUP;
+	if (hfnt == NULL) {
+		sMessage.assign(L"CreateFontIndirect@OnPaint ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;	
+	}
 
-	hfntPrev = SelectObject(hdcMemoryDevice, hfnt);
-	if (hfntPrev == NULL) goto CLEANUP;
+	hfntPrev = SelectObject(hdcOutputBuffer, hfnt);
+	if (hfntPrev == NULL) goto FAIL;
 
-	SetTextColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
-	SetBkColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
+	SetTextColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
+	SetBkColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
 
-	SelectObject(hdcMemoryDevice, bmBuffer);
+	SelectObject(hdcOutputBuffer, bmOutputBuffer);
 
 	// Get screenshot bitmap information and select bitmap
 	BITMAP bm;
-	GetObject(g_hBitmap, sizeof(bm), &bm);
-	hdcMemScreenshot = CreateCompatibleDC(hdc);
-	hOldGDIObj = SelectObject(hdcMemScreenshot, g_hBitmap);
-	if (hOldGDIObj == NULL) goto CLEANUP;
+	if (GetObject(g_hBitmap, sizeof(bm), &bm) == 0) goto FAIL;
+	hdcScreenshot = CreateCompatibleDC(hdc);
+	if (hdcScreenshot == NULL) goto FAIL;
+	hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
+	if (hbmScreenshotOld == NULL) goto FAIL;
 
 	// Use a blen function to get a darker image of the screenshot
 	BLENDFUNCTION blendFunc;
@@ -1564,16 +2050,17 @@ void OnPaint(HWND hWindow) {
 	blendFunc.SourceConstantAlpha = g_useAlternativeColors ? 255 : 50; // Factor to darken the screenshot
 	blendFunc.AlphaFormat = 0;
 
-	AlphaBlend(hdcMemoryDevice, 0, 0, bm.bmWidth, bm.bmHeight, hdcMemScreenshot, 0, 0, bm.bmWidth, bm.bmHeight, blendFunc);
-
-	// Restore selected object/Free bitmap
-	SelectObject(hdcMemScreenshot, hOldGDIObj);
-	hOldGDIObj = NULL;
+	if (!AlphaBlend(hdcOutputBuffer, 0, 0, bm.bmWidth, bm.bmHeight, hdcScreenshot, 0, 0, bm.bmWidth, bm.bmHeight, blendFunc))
+	{
+		sMessage.assign(L"AlphaBlend@OnPaint ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;			
+	}
 
 	hBrushForeground = CreateSolidBrush(g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
-	if (hBrushForeground == NULL) goto CLEANUP;
+	if (hBrushForeground == NULL) goto FAIL;
 	hBrushBackground = CreateSolidBrush(ALTAPPCOLORINV);
-	if (hBrushBackground == NULL) goto CLEANUP;
+	if (hBrushBackground == NULL) goto FAIL;
 
 	// Get inner/outer rects and zoom mouse position
 	switch (g_appState)
@@ -1581,31 +2068,12 @@ void OnPaint(HWND hWindow) {
 	case stateFirstPoint:
 		inner.left = g_selection.left;
 		inner.top = g_selection.top;
-		zoomMousePosition(hdc, hdcMemoryDevice, BoxFirstPointA);
+		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFirstPointA);
 		break;
 	case statePointA:
 	case statePointB:
 	{
-		if (g_selection.left < g_selection.right)
-		{
-			inner.left = g_selection.left;
-			inner.right = g_selection.right;
-		}
-		else
-		{
-			inner.left = g_selection.right;
-			inner.right = g_selection.left;
-		}
-		if (g_selection.top < g_selection.bottom)
-		{
-			inner.top = g_selection.top;
-			inner.bottom = g_selection.bottom;
-		}
-		else
-		{
-			inner.top = g_selection.bottom;
-			inner.bottom = g_selection.top;
-		}
+		inner = normalizeRectangle(g_selection);
 		if (inner.left < 0) inner.left = 0;
 		if (inner.right > bm.bmWidth - 1) inner.right = bm.bmWidth - 1;
 		if (inner.top < 0) inner.top = 0;
@@ -1616,22 +2084,25 @@ void OnPaint(HWND hWindow) {
 		outer.top = inner.top - 1;
 		outer.bottom = inner.bottom + 1 + 1; // +1 because GDI the second edge of a rect is not part of the drawn rectangle
 
-		// Show selected area of the darkended background of the screenshot
-		HDC hdcMem = CreateCompatibleDC(hdc);
-		HGDIOBJ hbmOld = SelectObject(hdcMem, g_hBitmap);
-		SetStretchBltMode(hdcMemoryDevice, COLORONCOLOR);
-		BitBlt(hdcMemoryDevice, inner.left, inner.top, inner.right - inner.left + 1, inner.bottom - inner.top + 1,
-			hdcMem, inner.left, inner.top, SRCCOPY);
-		SelectObject(hdcMem, hbmOld);
-		DeleteDC(hdcMem);
+		// Show selected area on the darkened background of the screenshot
+		if (!BitBlt(hdcOutputBuffer, inner.left, inner.top, inner.right - inner.left + 1, inner.bottom - inner.top + 1,
+			hdcScreenshot, inner.left, inner.top, SRCCOPY)) 
+		{
+			_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());
+			sMessage.assign(L"BitBlt@OnPaint ")
+				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+				.append(L" ")
+				.append(szHex);
+			goto FAIL;
+		}
 
 		// Draw frame
-		FrameRect(hdcMemoryDevice, &outer, hBrushForeground);
+		FrameRect(hdcOutputBuffer, &outer, hBrushForeground);
 
 		// Draw text for selection width
 		rectText = { 0, 0, 0, 0 };
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"%d", inner.right - inner.left + 1);
-		DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CALCRECT);
+		DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CALCRECT);
 
 		if (inner.top >= (rectText.bottom - rectText.top + 1))
 		{ // Enough space for text
@@ -1647,15 +2118,15 @@ void OnPaint(HWND hWindow) {
 		}
 
 		// Text color/background
-		SetTextColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
-		SetBkColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
+		SetTextColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
+		SetBkColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
 
 		// Draw text, when enough splace
 		if (abs(g_selection.right - g_selection.left) >= ZOOMWIDTH * g_zoomScale)
-			DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CENTER | DT_BOTTOM);
+			DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CENTER | DT_BOTTOM);
 
-		zoomMousePosition(hdc, hdcMemoryDevice, BoxFinalPointA);
-		zoomMousePosition(hdc, hdcMemoryDevice, BoxFinalPointB);
+		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFinalPointA);
+		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFinalPointB);
 
 		// Draw text for selection height
 		rectText = { 0, 0, 0, 0 };
@@ -1665,13 +2136,18 @@ void OnPaint(HWND hWindow) {
 		DeleteObject(hfnt);
 		plf->lfEscapement = 900; // 90 degree, does not work with lfFaceName "System"
 		hfnt = CreateFontIndirect(plf);
-		if (hfnt == NULL) goto CLEANUP;
+		if (hfnt == NULL)
+		{
+			sMessage.assign(L"CreateFontIndirect@OnPaint ")
+				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+			goto FAIL;
+		}
 
-		hfntPrev = SelectObject(hdcMemoryDevice, hfnt);
-		if (hfntPrev == NULL) goto CLEANUP;
+		hfntPrev = SelectObject(hdcOutputBuffer, hfnt);
+		if (hfntPrev == NULL) goto FAIL;
 
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"%d", inner.bottom - inner.top + 1);
-		DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CALCRECT);
+		DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CALCRECT);
 
 		// DT_CALCRECT does not like lfEscapement != 0 => Calculate position later
 		int dX = rectText.right - rectText.left + 1;
@@ -1689,18 +2165,18 @@ void OnPaint(HWND hWindow) {
 		}
 
 		// Text color/background
-		SetTextColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
-		SetBkColor(hdcMemoryDevice, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
+		SetTextColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLORINV : APPCOLORINV);
+		SetBkColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
 
 		// Draw text, when enough space
 		if (abs(g_selection.bottom - g_selection.top) >= ZOOMHEIGHT * g_zoomScale)
-			DrawText(hdcMemoryDevice, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP);
+			DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP);
 
 		break;
 	}
 	default:
 		OutputDebugString(L"Invalid appState");
-		goto CLEANUP;
+		goto FAIL;
 	}
 
 	// Draw information
@@ -1715,16 +2191,21 @@ void OnPaint(HWND hWindow) {
 		DeleteObject(hfnt);
 		plf->lfEscapement = 0;
 		hfnt = CreateFontIndirect(plf);
-		if (hfnt == NULL) goto CLEANUP;
+		if (hfnt == NULL)
+		{
+			sMessage.assign(L"CreateFontIndirect@OnPaint ")
+				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+			goto FAIL;
+		}
 
-		hfntPrev = SelectObject(hdcMemoryDevice, hfnt);
-		if (hfntPrev == NULL) goto CLEANUP;
+		hfntPrev = SelectObject(hdcOutputBuffer, hfnt);
+		if (hfntPrev == NULL) goto FAIL;
 
-		SetBkMode(hdcMemoryDevice, TRANSPARENT);
+		SetBkMode(hdcOutputBuffer, TRANSPARENT);
 		if (!g_useAlternativeColors)
-			SetTextColor(hdcMemoryDevice, APPCOLOR);
+			SetTextColor(hdcOutputBuffer, APPCOLOR);
 		else
-			SetTextColor(hdcMemoryDevice, ALTAPPCOLORINV);
+			SetTextColor(hdcOutputBuffer, ALTAPPCOLORINV);
 
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Virtual desktop [%d,%d] %dx%d", GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
 		sDisplayInfos.assign(strData);
@@ -1740,11 +2221,7 @@ void OnPaint(HWND hWindow) {
 
 		POINT mouse;
 		GetCursorPos(&mouse);
-		hOldGDIObj = SelectObject(hdcMemScreenshot, g_hBitmap);
-		if (hOldGDIObj == NULL) goto CLEANUP;
-		color = GetPixel(hdcMemScreenshot, mouse.x - g_appWindowPos.x, mouse.y - g_appWindowPos.y);
-		SelectObject(hdcMemScreenshot, hOldGDIObj);
-		hOldGDIObj = NULL;
+		color = GetPixel(hdcScreenshot, mouse.x - g_appWindowPos.x, mouse.y - g_appWindowPos.y);
 
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Mouse [%d,%d] RGB %d,%d,%d", mouse.x, mouse.y, GetRValue(color),GetGValue(color),GetBValue(color));
 		sDisplayInfos.append(L"\n").append(strData);
@@ -1758,7 +2235,7 @@ void OnPaint(HWND hWindow) {
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Alternative colors %s", g_useAlternativeColors ? L"On" : L"Off");
 		sDisplayInfos.append(L"\n").append(strData);
 
-		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"State %d appWindow [%d,%d] Selected Monitor %d", g_appState, g_appWindowPos.x, g_appWindowPos.y, g_selectedMonitor);
+		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"State %d appWindow [%d,%d] Selected Monitor %d", g_appState,g_appWindowPos.x, g_appWindowPos.y, g_selectedMonitor);
 		sDisplayInfos.append(L"\n").append(strData);
 		for (int i = 0; i < (int) g_rectMonitor.size(); i++)
 		{
@@ -1769,12 +2246,12 @@ void OnPaint(HWND hWindow) {
 			.append(L"Alt+cursor keys = Fast move A/B\nShift+cursor keys = Find color change for A/B\nReturn = OK\nESC = Cancel")
 			.append(L"\n+/- = Increase/decrease selection")
 			.append(L"\nPageUp/PageDown, mouse wheel = Zoom In/Out")
-			.append(L"\nInsert = Store selection\nHome = Restore selection")
+			.append(L"\nInsert = Store selection\nHome = Restore selection\nP = Pixelate selection\nB = Box around selection")
 			.append(L"\nC = Clipboard On/Off\nF = File On/Off\nS = Alternative colors On/Off")
 			.append(L"\nF1 = Display information On/Off");
 
 		// Calc text area
-		DrawText(hdcMemoryDevice, sDisplayInfos.c_str(), -1, &rectTextArea, DT_NOCLIP | DT_CALCRECT );
+		DrawText(hdcOutputBuffer, sDisplayInfos.c_str(), -1, &rectTextArea, DT_NOCLIP | DT_CALCRECT );
 
 		int height = (rectTextArea.bottom - rectTextArea.top + 1);
 		int width = (rectTextArea.right - rectTextArea.left + 1) + 1;
@@ -1813,13 +2290,13 @@ void OnPaint(HWND hWindow) {
 			}
 		}
 
-		if (g_useAlternativeColors) FillRect(hdcMemoryDevice, &rectTextArea, hBrushDisplayBackground); // Text area background
+		if (g_useAlternativeColors) FillRect(hdcOutputBuffer, &rectTextArea, hBrushDisplayBackground); // Text area background
 
 		// Draw text in text area
 		rectText.left = rectTextArea.left + 1;
 		rectText.right = rectTextArea.right - 1;
 		rectText.top = rectTextArea.top;
-		DrawText(hdcMemoryDevice, sDisplayInfos.c_str(), -1, &rectText, DT_NOCLIP | textFormat);
+		DrawText(hdcOutputBuffer, sDisplayInfos.c_str(), -1, &rectText, DT_NOCLIP | textFormat);
 
 		// Draw monitor layout
 		float scale = (float) (rectTextArea.right - rectTextArea.left) / GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -1828,11 +2305,11 @@ void OnPaint(HWND hWindow) {
 		virtualDesktop.top = rectTextArea.bottom + 10;
 		virtualDesktop.right = virtualDesktop.left + (LONG) round((GetSystemMetrics(SM_CXVIRTUALSCREEN) -1) * scale) + 1;
 		virtualDesktop.bottom = virtualDesktop.top + (LONG) round((GetSystemMetrics(SM_CYVIRTUALSCREEN) -1) * scale) + 1;
-		FrameRect(hdcMemoryDevice, &virtualDesktop, hBrushDisplayForeground); // Virtual desktop frame
+		FrameRect(hdcOutputBuffer, &virtualDesktop, hBrushDisplayForeground); // Virtual desktop frame
 
 		if (g_useAlternativeColors)
 		{
-			FillRect(hdcMemoryDevice, &virtualDesktop, hBrushDisplayBackground); // Background fill
+			FillRect(hdcOutputBuffer, &virtualDesktop, hBrushDisplayBackground); // Background fill
 		}
 
 		for (DWORD i = 0; i < g_rectMonitor.size(); i++)
@@ -1844,13 +2321,14 @@ void OnPaint(HWND hWindow) {
 			monitor.right = monitor.left + (LONG) round((g_rectMonitor[i].right-g_rectMonitor[i].left - 1) * scale) + 1;
 			monitor.bottom = monitor.top + (LONG) round((g_rectMonitor[i].bottom - g_rectMonitor[i].top -1) * scale) + 1;
 
-			FrameRect(hdcMemoryDevice, &monitor, hBrushDisplayForeground);
+			FrameRect(hdcOutputBuffer, &monitor, hBrushDisplayForeground);
 
 			_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"%d", i);
-			DrawText(hdcMemoryDevice, strData, -1, &monitor, DT_SINGLELINE | DT_NOCLIP | DT_CENTER | DT_VCENTER);
+			DrawText(hdcOutputBuffer, strData, -1, &monitor, DT_SINGLELINE | DT_NOCLIP | DT_CENTER | DT_VCENTER);
 
 		}
-		if ((g_selection.left != -1) && (g_selection.right != -1) && (g_selection.top != -1) && (g_selection.bottom != -1)) {
+		if (isSelectionValid(g_selection))
+		{
 			RECT selection;
 			if (g_selection.right >= g_selection.left) {
 				selection.left = virtualDesktop.left + (LONG) round(g_selection.left * scale);
@@ -1871,43 +2349,63 @@ void OnPaint(HWND hWindow) {
 				selection.bottom = virtualDesktop.top + (LONG) round(g_selection.top * scale) + 1;
 			}
 
-			FrameRect(hdcMemoryDevice, &selection, hBrushDisplayForeground);
+			FrameRect(hdcOutputBuffer, &selection, hBrushDisplayForeground);
 		}
 		else
 		{
-			if  ((g_selection.left != -1) && (g_selection.top != -1) ) { // Quick and dirty "pixel" at mouse cursor
+			if  ((g_selection.left != -1) && (g_selection.top != -1) ) { // Quick and dirty "pixel" at mouse cursor position
 				RECT pixel;
 				pixel.left = virtualDesktop.left + (LONG) round(g_selection.left * scale)-1;
 				pixel.top = virtualDesktop.top + (LONG) round(g_selection.top * scale)-1;
 				pixel.right = pixel.left+3;
 				pixel.bottom = pixel.top+3;
-				FrameRect(hdcMemoryDevice, &pixel, hBrushDisplayForeground);
+				FrameRect(hdcOutputBuffer, &pixel, hBrushDisplayForeground);
 			}
 		}
 	}
 
-	// Copy memory buffer to display
-	BitBlt(hdc, 0, 0, iWidth, iHeight, hdcMemoryDevice, 0, 0, SRCCOPY);
 
+	// Copy memory buffer to display
+	if (!BitBlt(hdc, 0, 0, iWidth, iHeight, hdcOutputBuffer, 0, 0, SRCCOPY)) 
+	{
+		_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());
+		sMessage.assign(L"BitBlt@OnPaint ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+			.append(L" ")
+			.append(szHex);
+		goto FAIL;
+	}
+
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"OnPaint fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"OnPaint ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
+	
 CLEANUP:
 	// Free resources/Cleanup
-	if (hOldGDIObj != NULL) SelectObject(hdcMemScreenshot, hOldGDIObj);
-	if (hdcMemScreenshot != NULL) DeleteDC(hdcMemScreenshot);
 	if (hBrushForeground != NULL) DeleteObject(hBrushForeground);
 	if (hBrushBackground != NULL) DeleteObject(hBrushBackground);
-	if (hdcMemoryDevice != NULL)
+
+	if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
+	if (hdcOutputBuffer != NULL)
 	{
 		// Restore memory device context statte
-		if (iBackupDC != 0) RestoreDC(hdcMemoryDevice, iBackupDC);
-		if (hfntPrev != NULL) SelectObject(hdcMemoryDevice, hfntPrev);
+		if (hfntPrev != NULL) SelectObject(hdcOutputBuffer, hfntPrev);
+		if (iBackupOutputDC != 0) RestoreDC(hdcOutputBuffer, iBackupOutputDC);
 	}
 	if (hfnt != NULL) DeleteObject(hfnt);
 	if (plf != NULL) LocalFree((LOCALHANDLE)plf);
-
-	if (bmBuffer != NULL) DeleteObject(bmBuffer);
-	if (hdcMemoryDevice != NULL) DeleteDC(hdcMemoryDevice);
-
+	if (bmOutputBuffer != NULL) DeleteObject(bmOutputBuffer);
+	
+	if (hdcOutputBuffer != NULL) DeleteDC(hdcOutputBuffer);
+	if (hdcScreenshot != NULL) DeleteDC(hdcScreenshot);
+	
 	EndPaint(hWindow, &ps);
+	
+	return bResult;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1987,25 +2485,31 @@ void resizeSelection(HWND hWindow, int stepSize)
 			LONG &y
 			  y start position (call by ref)
 
-  Returns:
+  Returns:	BOOL
+  			  TRUE = success
+  			  FALSE = failure
 
 -----------------------------------------------------------------F-F*/
-void setBeforeColorChange(WPARAM virtualKeyCode, LONG &x, LONG &y)
+BOOL setBeforeColorChange(WPARAM virtualKeyCode, LONG &x, LONG &y)
 {
 	BITMAP bm;
     int directionX = 0;
     int directionY = 0;
 	COLORREF referenceColor;
+	BOOL bResult = TRUE;
+	HDC hdcScreenshot = NULL;
+	HGDIOBJ hbmScreenshotOld = NULL;
+	std::wstring sMessage = L"";
+		
+	if (g_hBitmap == NULL) goto FAIL;
 
-	if (g_hBitmap == NULL) return;
+	if (GetObject(g_hBitmap, sizeof(bm), &bm) == 0) goto FAIL;
+    hdcScreenshot = CreateCompatibleDC(NULL);
+    if (hdcScreenshot == NULL) goto FAIL;
+    hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
+	if (hbmScreenshotOld == NULL) goto FAIL;
 
-	GetObject(g_hBitmap, sizeof(bm), &bm);
-    HDC hdcMem = CreateCompatibleDC(NULL);
-    if (hdcMem == NULL) return;
-    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, g_hBitmap);
-	if (hbmOld == NULL) goto CLEANUP;
-
-    referenceColor = GetPixel(hdcMem, x, y);
+    referenceColor = GetPixel(hdcScreenshot, x, y);
     switch (virtualKeyCode)
     {
     	case VK_UP:
@@ -2022,11 +2526,11 @@ void setBeforeColorChange(WPARAM virtualKeyCode, LONG &x, LONG &y)
     		break;
     	default:
  			OutputDebugString(L"Invalid wParam");
-			goto CLEANUP;
+			goto FAIL;
 	}
 
 	while (true) {
-		if (GetPixel(hdcMem, x + directionX, y + directionY) != referenceColor) break;
+		if (GetPixel(hdcScreenshot, x + directionX, y + directionY) != referenceColor) break;
 
 		if (x+directionX < 0) break;
 		if (x+directionX > bm.bmWidth-1) break;
@@ -2036,10 +2540,19 @@ void setBeforeColorChange(WPARAM virtualKeyCode, LONG &x, LONG &y)
 		x = limitXtoBitmap(x+directionX);
 		y = limitYtoBitmap(y+directionY);
 	}
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"setBeforeColorChange fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"setBeforeColorChange ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(g_hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
 
 CLEANUP:
-    if (hbmOld != NULL) SelectObject(hdcMem, hbmOld);
-    if (hdcMem != NULL) DeleteDC(hdcMem);
+    if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
+    if (hdcScreenshot != NULL) DeleteDC(hdcScreenshot);
+
+	return bResult;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -2195,14 +2708,19 @@ void checkCursorButtons(HWND hWindow, WPARAM wParam, int step)
   Args:     HWND hWindow
 			  Handle to window
 
-  Returns:
+  Returns:	BOOL
+  			  TRUE = success
+  			  FALSE = failure
 
 -----------------------------------------------------------------F-F*/
-int CaptureScreen(HWND hWindow)
+BOOL CaptureScreen(HWND hWindow)
 {
 	HDC hdcScreen = NULL;
-	HDC hdcMemDC = NULL;
-	HGDIOBJ hbmOld = NULL;
+	HDC hdcScreenshot = NULL;
+	HGDIOBJ hbmScreenshotOld = NULL;
+	BOOL bResult = TRUE;
+	std::wstring sMessage = L"";
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
 
 	int screenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
 	int screenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
@@ -2212,16 +2730,15 @@ int CaptureScreen(HWND hWindow)
 	// Retrieve the handle to a display device context for the client
 	// area of the window.
 	hdcScreen = GetDC(NULL);
+	if (hdcScreen == NULL) goto FAIL;
 
 	// Create a compatible DC, which is used in a BitBlt from the window DC.
-	hdcMemDC = CreateCompatibleDC(hdcScreen);
+	hdcScreenshot = CreateCompatibleDC(hdcScreen);
 
-	if (!hdcMemDC)
+	if (!hdcScreenshot)
 	{
-		std::wstring sMessage;
-		sMessage.assign(L"CreateCompatibleDC ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
-		MessageBox(hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
-		goto CLEANUP;
+		sMessage.assign(L"CreateCompatibleDC@CaptureScreen ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
 	}
 
 	if (g_hBitmap != NULL) { // Delete previous screenshot
@@ -2231,30 +2748,44 @@ int CaptureScreen(HWND hWindow)
 
 	// Create a compatible bitmap from the Window DC.
 	g_hBitmap = CreateCompatibleBitmap(hdcScreen, screenWidth, screenHeight);
+	if (g_hBitmap == NULL) 
+	{
+		sMessage.assign(L"CreateCompatibleBitmap@CaptureScreen ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		goto FAIL;
+	}
 	// Select the compatible bitmap into the compatible memory DC.
-	hbmOld = SelectObject(hdcMemDC, g_hBitmap);
+	hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
+	if (hbmScreenshotOld == NULL) goto FAIL;
 
 	// Bit block transfer into our compatible memory DC.
-	if (!BitBlt(hdcMemDC,
+	if (!BitBlt(hdcScreenshot,
 		0, 0,
 		screenWidth, screenHeight,
 		hdcScreen,
 		screenX, screenY,
 		SRCCOPY))
 	{
-		std::wstring sMessage;
-		sMessage.assign(L"BitBlt ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
-		MessageBox(hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
-		goto CLEANUP;
+		_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());
+		sMessage.assign(L"BitBlt@CaptureScreen ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+			.append(L" ")
+			.append(szHex);
+		goto FAIL;
 	}
-
+	goto CLEANUP;
+FAIL:
+	bResult = FALSE;
+	OutputDebugString(L"CaptureScreen fails");
+	if (sMessage.length() == 0)
+		sMessage.assign(L"CaptureScreen ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+	MessageBox(hWindow, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
 CLEANUP:
 	// Free resources/Clean up
-	if (hbmOld != NULL) SelectObject(hdcMemDC, hbmOld);
-	if (hdcMemDC != NULL) DeleteDC(hdcMemDC);
-
-	ReleaseDC(NULL, hdcScreen);
-	return 0;
+	if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
+	if (hdcScreenshot != NULL) DeleteDC(hdcScreenshot);
+	if (hdcScreen != NULL) ReleaseDC(NULL, hdcScreen);
+	return bResult;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -2299,6 +2830,8 @@ void startCaptureGUI(HWND hWindow) {
 	BYTE     bAlpha;
 	DWORD    dwFlags;
 
+	KillTimer(hWindow, IDT_TIMER5000MS);
+		
 	g_activeWindow = GetForegroundWindow();
 	GetLayeredWindowAttributes(hWindow, &crKey, &bAlpha, &dwFlags);
 
@@ -2381,6 +2914,66 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: checkArguments
+
+  Summary:   Check program arguments
+
+  Args:     
+
+  Returns:  BOOL
+  			  TRUE = success
+  			  FALSE = failure
+
+-----------------------------------------------------------------F-F*/
+BOOL checkArguments() 
+{
+    int argc;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
+
+    if (argv == NULL) return FALSE;
+
+	g_saveToClipboard = FALSE;
+	g_saveToFile = FALSE;
+
+    for (int i = 0; i < argc; i++) 
+	{
+    	if (_wcsicmp(argv[i], L"/ac") == 0) g_saveToClipboard = TRUE;
+		if (_wcsicmp(argv[i], L"/af") == 0) g_saveToFile = TRUE;
+		if (_wcsicmp(argv[i], L"/f") == 0) ShellExecute(NULL, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL); // Open screenshot folder
+		if (_wcsicmp(argv[i], L"/s") == 0) g_onetimeCapture = TRUE; // Enable onetimeCapture mode
+		if (_wcsicmp(argv[i], L"/v") == 0) 
+		{
+			showProgramInformation(NULL);
+			Sleep(200); // Delay next step to prevent animation artifacts on screenshots
+		}
+		if (_wcsicmp(argv[i], L"/?") == 0) 
+		{
+			showProgramArguments(NULL);
+			Sleep(200);	// Delay next step to prevent animation artifacts on screenshots
+		}
+	}
+
+    LocalFree(argv);
+
+	if (g_saveToClipboard || g_saveToFile)
+	{
+		CaptureScreen(NULL);
+		if (g_hBitmap == NULL) return FALSE;
+		BITMAP bm;
+		if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0) 
+		{
+			g_selection.left = limitXtoBitmap(0);
+			g_selection.top = limitYtoBitmap(0);
+			g_selection.right = limitXtoBitmap(bm.bmWidth - 1);
+			g_selection.bottom = limitYtoBitmap(bm.bmHeight - 1);
+			saveSelection(NULL);
+		}
+	}
+
+    return TRUE;
+} 
+   
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: wWinMain
 
   Summary:   Process window messages of main window
@@ -2404,10 +2997,17 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	_In_ int       nCmdShow)
 #endif
 {
+	std::wstring sMessage = L"";
+	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
+	MSG msg;
+		
+	checkArguments(); 
+		
 	HANDLE hMutex = CreateMutex(NULL, TRUE, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
 
 	// Prevents concurrent program starts
-	if (GetLastError() == ERROR_ALREADY_EXISTS) {
+	if (!g_onetimeCapture && (GetLastError() == ERROR_ALREADY_EXISTS)) 
+	{
 		OutputDebugString(L"Program already startet");
 		return 0;
 	}
@@ -2420,8 +3020,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
 	if (!g_hWindow) { // Error
-		std::wstring sMessage;
-		sMessage.assign(L"CreateWindow ").append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+		_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());	
+		sMessage.assign(L"CreateWindow@wWinMain ")
+			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+			.append(L" ")
+			.append(szHex);
 		MessageBox(NULL, sMessage.c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
 		if (hMutex != NULL)
 		{
@@ -2434,25 +3037,25 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// Get settings from registry
 	g_saveToFile = getDWORDSettingFromRegistry(saveToFile);
 	g_saveToClipboard = getDWORDSettingFromRegistry(saveToClipboard);
-	if (!g_saveToClipboard && !g_saveToFile) // Clipboard and file was disabled by user => Warning
+	checkScreenshotTargets(g_hWindow);
+	getRunRegistryValue();
+	
+	if (g_onetimeCapture) SendMessage(g_hWindow, WM_STARTED, 0, 0); // onetimeCapture mode
+	else 
 	{
-		MessageBox(g_hWindow, LoadStringAsWstr(g_hInst, IDS_NOSAVING).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
-	}
-
-	// Add tray icon entry
-	g_nid.cbSize = sizeof(NOTIFYICONDATA);
-	g_nid.hWnd = g_hWindow;
-	g_nid.uID = 1;
-	g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-	g_nid.uCallbackMessage = WM_TRAYICON;
-	g_nid.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
+		// Add tray icon entry
+		g_nid.cbSize = sizeof(NOTIFYICONDATA);
+		g_nid.hWnd = g_hWindow;
+		g_nid.uID = 1;
+		g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+		g_nid.uCallbackMessage = WM_TRAYICON;
+		g_nid.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
 #define MAXTOOLTIPSIZE 64 // Including null termination
-	_snwprintf_s(g_nid.szTip, MAXTOOLTIPSIZE, _TRUNCATE, L"%s", LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
-	Shell_NotifyIcon(NIM_ADD, &g_nid);
+		_snwprintf_s(g_nid.szTip, MAXTOOLTIPSIZE, _TRUNCATE, L"%s", LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
+		Shell_NotifyIcon(NIM_ADD, &g_nid);
 
-	MSG msg;
-
-	SetHook();
+		SetHook();
+	}
 
 	// Main message loop:
 	while (GetMessage(&msg, nullptr, 0, 0))
@@ -2461,15 +3064,18 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		DispatchMessage(&msg);
 	}
 
-	ReleaseHook();
-	// Remove tray icon entry
-	Shell_NotifyIcon(NIM_DELETE, &g_nid);
-
-	// Free Mutex to allow next program start
-	if (hMutex != NULL)
+	if (!g_onetimeCapture) // If not onetimeCapture mode
 	{
-		ReleaseMutex(hMutex);
-		CloseHandle(hMutex);
+		ReleaseHook();
+		// Remove tray icon entry
+		Shell_NotifyIcon(NIM_DELETE, &g_nid);
+		
+		// Free Mutex to allow next program start
+		if (hMutex != NULL)
+		{
+			ReleaseMutex(hMutex);
+			CloseHandle(hMutex);
+		}
 	}
 
 	return (int)msg.wParam;
@@ -2516,14 +3122,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
 		if (g_hBitmap == NULL) break;
 		BITMAP bm;
-		GetObject(g_hBitmap, sizeof(bm), &bm);
-		g_appState = statePointB;
-		g_selection.left = limitXtoBitmap(0);
-		g_selection.top = limitYtoBitmap(0);
-		g_selection.right = limitXtoBitmap(bm.bmWidth - 1);
-		g_selection.bottom = limitYtoBitmap(bm.bmHeight - 1);
-		InvalidateRect(hWnd, NULL, TRUE);
-		// Do not SetCursorPos, because this can make trouble on multimonitor systems with different resolutions
+		if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0)
+		{
+			g_appState = statePointB;
+			g_selection.left = limitXtoBitmap(0);
+			g_selection.top = limitYtoBitmap(0);
+			g_selection.right = limitXtoBitmap(bm.bmWidth - 1);
+			g_selection.bottom = limitYtoBitmap(bm.bmHeight - 1);
+			InvalidateRect(hWnd, NULL, TRUE);
+			// Do not SetCursorPos, because this can make trouble on multimonitor systems with different resolutions
+		}
 		break;
 	}
 	case WM_STARTED: // Start new capture
@@ -2533,7 +3141,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	}
 	case WM_GOTOTRAY: // Hide window and goto tray icon
 	{
+		if (g_onetimeCapture) DestroyWindow(hWnd); // Exit program in onetimeCapture mode
 		KillTimer(hWnd, IDT_TIMER1000MS);
+		KillTimer(hWnd, IDT_TIMER5000MS);
 		ShowCursor(true);
 		ShowWindow(hWnd, SW_HIDE);
 		g_appState = stateTrayIcon;
@@ -2585,8 +3195,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			AppendMenu(hMenu, MF_STRING, IDM_SETFOLDER, LoadStringAsWstr(g_hInst, IDS_SETFOLDER).c_str());
 			AppendMenu(hMenu, MF_STRING | (g_saveToClipboard ? MF_CHECKED : 0), IDM_SAVETOCLIPBOARD, LoadStringAsWstr(g_hInst, IDS_SAVETOCLIPBOARD).c_str());
 			AppendMenu(hMenu, MF_STRING | (g_saveToFile ? MF_CHECKED : 0), IDM_SAVETOFILE, LoadStringAsWstr(g_hInst, IDS_SAVETOFILE).c_str());
-			AppendMenu(hMenu, MF_STRING, IDM_ABOUT, LoadStringAsWstr(g_hInst, IDS_ABOUT).c_str());
 			AppendMenu(hMenu, MF_SEPARATOR | MF_BYPOSITION, 0, NULL);
+			AppendMenu(hMenu, MF_STRING, IDM_ABOUT, LoadStringAsWstr(g_hInst, IDS_ABOUT).c_str());
+			AppendMenu(hMenu, MF_STRING | (getRunRegistryValue() ? MF_CHECKED : 0), IDM_AUTORUN, LoadStringAsWstr(g_hInst, IDS_AUTORUN).c_str());
 			AppendMenu(hMenu, MF_STRING, IDM_EXIT, LoadStringAsWstr(g_hInst, IDS_EXIT).c_str());
 			SetForegroundWindow(hWnd);
 			TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
@@ -2645,8 +3256,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case 'S': // S => Toogle colors
 			SendMessage(hWnd, WM_COMMAND, IDM_ALTERNATIVECOLORS, 0);
 			break;
+		case 'P': // P => Pixelate
+			if ((g_appState == statePointB) || (g_appState == statePointA))
+			{
+				pixelateScreenshotRect(g_selection, PIXELATEFACTOR);
+				g_selection.right = -1;
+				g_selection.bottom = -1;
+				g_appState = stateFirstPoint;
+				MySetCursorPos(g_selection.left, g_selection.top);
+				InvalidateRect(hWnd, NULL, TRUE);
+			}
+			break;
+		case 'B': // B => Mark selection
+			if ((g_appState == statePointB) || (g_appState == statePointA))
+			{
+				markScreenshotRect(g_selection, MARKEDWIDTH,MARKEDALPHA);
+				g_selection.right = -1;
+				g_selection.bottom = -1;
+				g_appState = stateFirstPoint;
+				MySetCursorPos(g_selection.left, g_selection.top);
+				InvalidateRect(hWnd, NULL, TRUE);
+			}
+			break;
 		case VK_INSERT: // Insert => Store selection
-			if ((g_selection.left != -1) && (g_selection.right != -1) && (g_selection.top != -1) && (g_selection.bottom != -1))
+			if (isSelectionValid(g_selection))
 			{
 				g_storedSelection = g_selection;
 				storeDWORDSettingInRegistry(storedSelectionLeft, g_selection.left);
@@ -2657,15 +3290,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			}
 			break;
 		case VK_HOME: // Home => Restore selection
-			if ((g_storedSelection.left != -1) && (g_storedSelection.right != -1) && (g_storedSelection.top != -1) && (g_storedSelection.bottom != -1))
-			{
-				g_appState = statePointB;
-				g_selection.left = limitXtoBitmap(g_storedSelection.left);
-				g_selection.right = limitXtoBitmap(g_storedSelection.right);
-				g_selection.top = limitYtoBitmap(g_storedSelection.top);
-				g_selection.bottom = limitYtoBitmap(g_storedSelection.bottom);
-				InvalidateRect(hWnd, NULL, TRUE);
-			}
+			g_appState = statePointB;
+			g_selection.left = limitXtoBitmap(g_storedSelection.left);
+			g_selection.right = limitXtoBitmap(g_storedSelection.right);
+			g_selection.top = limitYtoBitmap(g_storedSelection.top);
+			g_selection.bottom = limitYtoBitmap(g_storedSelection.bottom);
+			InvalidateRect(hWnd, NULL, TRUE);
 			break;
 		case VK_F1: // F1 => Toggle display information
 			SendMessage(hWnd, WM_COMMAND, IDM_DISPLAYINFORMATION, 0);
@@ -2724,13 +3354,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
 		POINT pt;
 		GetCursorPos(&pt);
-		ShowCursor(true);
+		if (g_appState != stateTrayIcon) ShowCursor(true);
 		HMENU hMenu = CreatePopupMenu();
 		AppendMenu(hMenu, MF_STRING, IDM_CANCELCAPTURE, LoadStringAsWstr(g_hInst, IDS_CANCELCAPTURE).c_str());
 		AppendMenu(hMenu, MF_STRING, IDM_EXIT, LoadStringAsWstr(g_hInst, IDS_EXIT).c_str());
 		TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
 		DestroyMenu(hMenu);
-		ShowCursor(false);
+		if (g_appState != stateTrayIcon) ShowCursor(false);
 		break;
 	}
 	case WM_MOUSEMOVE: // Mouse moved
@@ -2769,23 +3399,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case IDM_SAVETOCLIPBOARD: // Toggle save to clipboard
 			g_saveToClipboard = !g_saveToClipboard;
 			storeDWORDSettingInRegistry(saveToClipboard, g_saveToClipboard);
-			if (!g_saveToClipboard && !g_saveToFile) // Clipboard and file was disabled by user => Warning
-			{
-				if (g_appState != stateTrayIcon) ShowCursor(true);
-				MessageBox(hWnd, LoadStringAsWstr(g_hInst, IDS_NOSAVING).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
-				if (g_appState != stateTrayIcon) ShowCursor(false);
-			}
+			checkScreenshotTargets(hWnd);
 			InvalidateRect(hWnd, NULL, TRUE);
 			break;
 		case IDM_SAVETOFILE: // Toggle save to file
 			g_saveToFile = !g_saveToFile;
 			storeDWORDSettingInRegistry(saveToFile,g_saveToFile);
-			if (!g_saveToClipboard && !g_saveToFile) // Clipboard and file was disabled by user => Warning
-			{
-				if (g_appState != stateTrayIcon) ShowCursor(true);
-				MessageBox(hWnd, LoadStringAsWstr(g_hInst, IDS_NOSAVING).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
-				if (g_appState != stateTrayIcon) ShowCursor(false);
-			}
+			checkScreenshotTargets(hWnd);
 			InvalidateRect(hWnd, NULL, TRUE);
 			break;
 		case IDM_ALTERNATIVECOLORS: // Toggle colors
@@ -2800,6 +3420,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			break;
 		case IDM_CANCELCAPTURE: // Cancel screenshot
 			SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
+			break;
+		case IDM_AUTORUN: // Toggle run key value
+			setRunRegistryValue(!getRunRegistryValue());
 			break;
 		}
 		break;

@@ -4,7 +4,7 @@ C/C++ project for a classic screenshot tool to save screenshots as PNG files or 
 Watch version 1.0.1 on [Youtube](https://youtu.be/wQBMCGwqIpA)
 
 Supports:
-- Zooming mouse area
+- Zooming mouse position
 - Area selection
 - All monitors selection
 - Single monitor selection
@@ -19,7 +19,7 @@ Commands:
 | Print screen | Start screenshot to select point A |
 | A | Select all monitors |
 | M | Select next monitor |
-| Tab | Toggle point between A <-> B |
+| Tab | Toggle point between A and B |
 | Cursor keys | Move point A or B |
 | Alt+cursor keys | Fast move point A or B |
 | Shift+cursor keys | Find color change for point A or B |
@@ -29,10 +29,10 @@ Commands:
 | Home | Restore selection
 | +/- | Increase/decrease selection |
 | PageUp/PageDown, mouse wheel | Zoom In/Out |
-| C | Save to clipboard On/Off |
-| F | Save to file On/Off |
-| S | Alternative colors On/Off |
-| F1 | Display internal information on screen On/Off |
+| C | On/off save to clipboard |
+| F | On/off save to file |
+| S | On/off alternative colors |
+| F1 | On/off display internal information on screen |
 
 After program launch abiSnip starts in the tray icon area and waits for the "Print screen" key to be pressed
 
@@ -46,14 +46,14 @@ After selecting point A by pressing the left mouse button or the return key the 
 
 ![Screenshot of main window](assets/images/MovePointB.png)
 
-After selecting point B by pressing the left mouse button or the return key the selected area will be stored in a PNG file the abiSnip goes back to the tray icon area.
+After selecting point B by pressing the left mouse button or the return key the selected area will be stored in a PNG file and abiSnip goes back to the tray icon area.
 
 The tray icon has a context menu for common functions
 
 ![Screenshot of main window](assets/images/TrayIconContextMenu.png)
 
 ## License and copyright
-This project is licensed under the terms of the CC0 [Copyright (c) 2024 codingABI](LICENSE). 
+This project is licensed under the terms of the CC0 [Copyright (c) 2025 codingABI](LICENSE). 
 
 ## Appendix
 
