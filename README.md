@@ -26,7 +26,8 @@ Commands:
 | Return or left mouse button click | OK, confirm selection |
 | ESC | Cancel the screenshot |
 | Insert | Store selection |
-| Home | Restore selection
+| Home | Use stored selection |
+| Delete | Delete stored and used selection |
 | +/- | Increase/decrease selection |
 | PageUp/PageDown, mouse wheel | Zoom In/Out |
 | C | On/off save to clipboard |
