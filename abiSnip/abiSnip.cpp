@@ -1226,7 +1226,6 @@ BOOL zoomMousePosition(HDC hdcOutputBuffer, HDC hdcScreenshot, BOXTYPE boxType)
 	int zoomCenterX, zoomCenterY, zoomBoxX, zoomBoxY;
 	BOOL bResult = TRUE;
 	std::wstring sMessage = L"";
-//	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
 
 	if ((boxType != BoxFirstPointA) && (abs(g_selection.right - g_selection.left) < ZOOMWIDTH * g_zoomScale)) goto CLEANUP; // Selection too small
 	if ((boxType != BoxFirstPointA) && (abs(g_selection.bottom - g_selection.top) < ZOOMHEIGHT * g_zoomScale)) goto CLEANUP; // Selection too small
@@ -1740,7 +1739,6 @@ BOOL pixelateScreenshotRect(RECT rect, DWORD blockSize) {
 	HGDIOBJ hbmScreenshotOld = NULL;
 	BOOL bResult = TRUE;
 	std::wstring sMessage = L"";
-//	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
 
 	if (g_hBitmap == NULL) goto FAIL;
 
