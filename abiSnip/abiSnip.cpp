@@ -15,7 +15,7 @@
              - Selection can be pixelated
              - Selection can marked with a colored box
 
-			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
+             Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
   License: CC0
   Copyright (c) 2025 codingABI
@@ -3021,7 +3021,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	checkArguments();
 
 	// Semaphore to prevent concurrent actions
-	g_hSemaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, L"modalBlocked");
+	g_hSemaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, NULL);
 	if (g_hSemaphoreModalBlocked == NULL)
 	{
 		OutputDebugString(L"Error creating semaphore");
@@ -3225,7 +3225,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 				// Skip menu, when a modal dialog is running
 				if (WaitForSingleObject(g_hSemaphoreModalBlocked,0) != WAIT_OBJECT_0) 
 				{
-					SetForegroundWindow(hWnd); // Bing modal dialog in foreground
+					SetForegroundWindow(hWnd); // Bring modal dialog in foreground
 					break;
 				}
 				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
