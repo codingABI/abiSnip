@@ -160,7 +160,7 @@ APPSTATE g_appState = stateTrayIcon; // Current program state
 HWND g_activeWindow = NULL; // Active window before program starts fullscreen mode
 int g_zoomScale = DEFAULTZOOMSCALE; // Zoom scale for mouse cursor
 HHOOK g_hHook = NULL; // Handle to hook (We use keyboard hook to start fullscreen mode, when the "Print screen" key was pressed)
-HANDLE g_semaphoreModalBlocked = NULL; // Semaphore to ensure modal dialogs (even when started by tray icon menu)
+HANDLE g_hSemaphoreModalBlocked = NULL; // Semaphore to ensure modal dialogs (even when started by tray icon menu)
 NOTIFYICONDATA g_nid; // Tray icon structure
 UINT WM_TASKBARCREATED = 0; // Windows sends this message when the taskbar is created (Needs RegisterWindowMessage)
 
@@ -367,7 +367,7 @@ void showProgramInformation(HWND hWindow)
 		}
 		delete[] verData;
 	}
-	
+
 	MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_PROGINFO).c_str(), sTitle.c_str(), MB_ICONINFORMATION | MB_OK );
 }
 
@@ -679,7 +679,7 @@ bool getRunRegistryValue()
 				wchar_t szProgramPathQuoted[MAX_PATH];
 				if (GetModuleFileName(NULL, szProgramPath, MAX_PATH) > 0)
 				{
-					_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c", L'"', szProgramPath, L'"'); // Quote string	
+					_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c", L'"', szProgramPath, L'"'); // Quote string
 					if (_wcsicmp(szValue, szProgramPathQuoted) != 0) setRunRegistryValue(TRUE); // Fix invalid registry value
 				}
 			}
@@ -3021,13 +3021,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	checkArguments();
 
 	// Semaphore to prevent actions while a modal dialog is running
-	g_semaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, NULL);
-	if (g_semaphoreModalBlocked == NULL) 
+	g_hSemaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, NULL);
+	if (g_hSemaphoreModalBlocked == NULL)
 	{
 		OutputDebugString(L"Error creating semaphore for modal dialogs");
 		return 0;
 	}
-	
+
 	HANDLE hMutex = CreateMutex(NULL, TRUE, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
 
 	// Prevents concurrent program starts
@@ -3107,7 +3107,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 
 	// Close semaphore handles
-	if (g_semaphoreModalBlocked != NULL) CloseHandle(g_semaphoreModalBlocked);
+	if (g_hSemaphoreModalBlocked != NULL) CloseHandle(g_hSemaphoreModalBlocked);
 
 	return (int)msg.wParam;
 }
@@ -3168,8 +3168,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case WM_STARTED: // Start new capture
 		{
 			// Skip caputure, when a modal dialog is running
-			if (WaitForSingleObject(g_semaphoreModalBlocked, 0) != WAIT_OBJECT_0) break;
-			ReleaseSemaphore(g_semaphoreModalBlocked, 1, NULL);
+			if (WaitForSingleObject(g_hSemaphoreModalBlocked, 0) != WAIT_OBJECT_0) break;
+			ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 
 			startCaptureGUI(hWnd);
 			break;
@@ -3223,8 +3223,8 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			case WM_RBUTTONUP: // Right click on tray icon => Context menu
 			{
 				// Skip menu, when a modal dialog is running
-				if (WaitForSingleObject(g_semaphoreModalBlocked,0) != WAIT_OBJECT_0) break;
-				ReleaseSemaphore(g_semaphoreModalBlocked, 1, NULL);
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked,0) != WAIT_OBJECT_0) break;
+				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 
 				POINT pt;
 				GetCursorPos(&pt);
@@ -3328,7 +3328,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 					InvalidateRect(hWnd, NULL, TRUE);
 				}
 				break;
-			case VK_DELETE: // Delete => Clear stored and used selection 
+			case VK_DELETE: // Delete => Clear stored and used selection
 			{
 				g_storedSelection = { UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG };
 				storeDWORDSettingInRegistry(storedSelectionLeft, UNINITIALIZEDLONG);
@@ -3443,30 +3443,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			switch (LOWORD(wParam))
 			{
 			case IDM_CAPTURE:
-				if (WaitForSingleObject(g_semaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
 				{
 					SetTimer(hWnd, IDT_TIMER5000MS, 5000, (TIMERPROC)NULL);
-					ReleaseSemaphore(g_semaphoreModalBlocked, 1, NULL);
+					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 				}
 				break;
 			case IDM_EXIT:
 				PostQuitMessage(0);
 				break;
 			case IDM_ABOUT:
-				if (WaitForSingleObject(g_semaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
 				{
 					showProgramInformation(hWnd);
-					ReleaseSemaphore(g_semaphoreModalBlocked, 1, NULL);
+					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 				}
 				break;
 			case IDM_OPENFOLDER:
 				ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
 				break;
 			case IDM_SETFOLDER:
-				if (WaitForSingleObject(g_semaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
 				{
 					changeScreenshotPathAndStorePathToRegistry();
-					ReleaseSemaphore(g_semaphoreModalBlocked, 1, NULL);
+					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 				}
 				break;
 			case IDM_SAVETOCLIPBOARD: // Toggle save to clipboard
