@@ -2,18 +2,18 @@
   File:      abiSnip.cpp
 
   Summary:   Tool to save screenshots as PNG files or copy screenshots to clipboard
-			 when the "Print screen" key was pressed
+             when the "Print screen" key was pressed
 
-			 Supports:
-			 - Zooming the mouse pointer area
-			 - Area selection
-			 - All monitors selection
-			 - Single monitor selection
-			 - Selections can be adjusted by mouse or keyboard
-			 - Folder for PNG files can be set with the context menu of the tray icon
-			 - Filename for a PNG file will be set automatically and contains a timestamp, for example "Screenshot 2024-11-24 100706.png"
-			 - Selection can be pixelated
-			 - Selection can marked with a colored box
+             Supports:
+             - Zooming the mouse pointer area
+             - Area selection
+             - All monitors selection
+             - Single monitor selection
+             - Selections can be adjusted by mouse or keyboard
+             - Folder for PNG files can be set with the context menu of the tray icon
+             - Filename for a PNG file will be set automatically and contains a timestamp, for example "Screenshot 2024-11-24 100706.png"
+             - Selection can be pixelated
+             - Selection can marked with a colored box
 
 			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
@@ -51,13 +51,13 @@
   History:
   20241202, Initial version 1.0.0.1
   20250102, Add pixelate selection
-			Add box around selected area
-			Add command line arguments
-			Add autostart at logon option
-			Version update to 1.0.0.2
+            Add box around selected area
+            Add command line arguments
+            Add autostart at logon option
+            Version update to 1.0.0.2
   20250103, Fix: No RECT -1,-1,-1,-1 was allowed
-			Restore g_storedSelection when starting capture
-  20250206, Prevent nonmodal dialogs from tray icon context menu
+            Restore g_storedSelection when starting capture
+  20250206, Prevent concurrent actions from tray icon context menu
             Recreate tray icon if explorer crashes
 ===================================================================+*/
 
@@ -3020,11 +3020,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	checkArguments();
 
-	// Semaphore to prevent actions while a modal dialog is running
-	g_hSemaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, NULL);
+	// Semaphore to prevent concurrent actions
+	g_hSemaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, L"modalBlocked");
 	if (g_hSemaphoreModalBlocked == NULL)
 	{
-		OutputDebugString(L"Error creating semaphore for modal dialogs");
+		OutputDebugString(L"Error creating semaphore");
 		return 0;
 	}
 
@@ -3223,7 +3223,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			case WM_RBUTTONUP: // Right click on tray icon => Context menu
 			{
 				// Skip menu, when a modal dialog is running
-				if (WaitForSingleObject(g_hSemaphoreModalBlocked,0) != WAIT_OBJECT_0) break;
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked,0) != WAIT_OBJECT_0) 
+				{
+					SetForegroundWindow(hWnd); // Bing modal dialog in foreground
+					break;
+				}
 				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 
 				POINT pt;
