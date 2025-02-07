@@ -2,20 +2,20 @@
   File:      abiSnip.cpp
 
   Summary:   Tool to save screenshots as PNG files or copy screenshots to clipboard
-             when the "Print screen" key was pressed
+			 when the "Print screen" key was pressed
 
-             Supports:
-             - Zooming the mouse pointer area
-             - Area selection
-             - All monitors selection
-             - Single monitor selection
-             - Selections can be adjusted by mouse or keyboard
-             - Folder for PNG files can be set with the context menu of the tray icon
-             - Filename for a PNG file will be set automatically and contains a timestamp, for example "Screenshot 2024-11-24 100706.png"
-             - Selection can be pixelated
-             - Selection can marked with a colored box
+			 Supports:
+			 - Zooming the mouse pointer area
+			 - Area selection
+			 - All monitors selection
+			 - Single monitor selection
+			 - Selections can be adjusted by mouse or keyboard
+			 - Folder for PNG files can be set with the context menu of the tray icon
+			 - Filename for a PNG file will be set automatically and contains a timestamp, for example "Screenshot 2024-11-24 100706.png"
+			 - Selection can be pixelated
+			 - Selection can marked with a colored box
 
-             Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
+			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
   License: CC0
   Copyright (c) 2025 codingABI
@@ -51,14 +51,16 @@
   History:
   20241202, Initial version 1.0.0.1
   20250102, Add pixelate selection
-            Add box around selected area
-            Add command line arguments
-            Add autostart at logon option
-            Version update to 1.0.0.2
+			Add box around selected area
+			Add command line arguments
+			Add autostart at logon option
+			Version update to 1.0.0.2
   20250103, Fix: No RECT -1,-1,-1,-1 was allowed
-            Restore g_storedSelection when starting capture
+			Restore g_storedSelection when starting capture
   20250206, Prevent concurrent actions from tray icon context menu
-            Recreate tray icon if explorer crashes
+			Recreate tray icon if explorer crashes
+  20250207, Change program info MessageBox to TaskDialog (URL and better high dpi support)
+            Version update to 1.0.0.3
 ===================================================================+*/
 
 // For GNU compilers
@@ -85,6 +87,7 @@
 #pragma comment(lib,"Shlwapi")
 #pragma comment(lib,"Gdiplus")
 #pragma comment(lib,"Version")
+#pragma comment(lib,"Comctl32")
 
 using namespace Gdiplus;
 // Defines
@@ -321,9 +324,30 @@ RECT normalizeRectangle(RECT rect)
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: programInformationProc
+
+  Summary:  Callback for program information dialog
+
+  Args:     HWND hWindow
+  			UINT uMsg
+			WPARAM wParam,
+			LPARAM lParam,
+			LONG_PTR lpRefData
+
+  Returns:  HRESULT
+
+-----------------------------------------------------------------F-F*/
+HRESULT CALLBACK programInformationCallbackProc(HWND hWindow, UINT uMsg, WPARAM wParam, LPARAM lParam, LONG_PTR lpRefData) {
+	if (uMsg == TDN_HYPERLINK_CLICKED) {
+		ShellExecute(NULL, L"open", (LPCWSTR)lParam, NULL, NULL, SW_SHOWNORMAL);
+	}
+	return S_OK;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: showProgramInformation
 
-  Summary:   Show program information message box
+  Summary:   Show program information dialog
 
   Args:     HWND hWindow
 			  Handle to main window
@@ -334,6 +358,7 @@ RECT normalizeRectangle(RECT rect)
 void showProgramInformation(HWND hWindow)
 {
 	std::wstring sTitle(LoadStringAsWstr(g_hInst, IDS_APP_TITLE));
+	std::wstring sMessage(LoadStringAsWstr(g_hInst, IDS_PROGINFO));
 	wchar_t szExecutable[MAX_PATH];
 	GetModuleFileName(NULL, szExecutable, MAX_PATH);
 
@@ -368,7 +393,21 @@ void showProgramInformation(HWND hWindow)
 		delete[] verData;
 	}
 
-	MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_PROGINFO).c_str(), sTitle.c_str(), MB_ICONINFORMATION | MB_OK );
+
+	int nButtonPressed = 0;
+	TASKDIALOGCONFIG config = { 0 };
+	config.cbSize = sizeof(config);
+	config.hInstance = g_hInst;
+	config.hwndParent = hWindow;
+	config.dwCommonButtons = TDCBF_OK_BUTTON;
+	config.pszMainIcon = MAKEINTRESOURCE(IDI_ICON);
+	config.pszMainInstruction = sTitle.c_str();
+	config.pszContent = sMessage.c_str();
+	config.pszFooter = L"<A HREF=\"https://github.com/codingABI/abiSnip\">https://github.com/codingABI/abiSnip</A>";
+	config.pfCallback = programInformationCallbackProc;
+	config.dwFlags = TDF_ENABLE_HYPERLINKS;
+
+	TaskDialogIndirect(&config, &nButtonPressed, NULL, NULL);
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -3131,389 +3170,389 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
 	switch (message)
 	{
-		case WM_MOUSEWHEEL: {
-			int delta = GET_WHEEL_DELTA_WPARAM(wParam);
-			if (delta > 0)
-				SendMessage(hWnd, WM_ZOOMIN, 0, 0);
-			else
-				SendMessage(hWnd, WM_ZOOMOUT, 0, 0);
-			break;
-		}
-		case WM_ZOOMIN:
-			g_zoomScale++;
-			if (g_zoomScale > MAXZOOMFACTOR) g_zoomScale = MAXZOOMFACTOR;
-			InvalidateRect(hWnd, NULL, TRUE);
-			break;
-		case WM_ZOOMOUT:
-			g_zoomScale--;
-			if (g_zoomScale <= 1) g_zoomScale = 1;
-			InvalidateRect(hWnd, NULL, TRUE);
-			break;
-		case WM_SELECTALL: // Select area over all monitors
+	case WM_MOUSEWHEEL: {
+		int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+		if (delta > 0)
+			SendMessage(hWnd, WM_ZOOMIN, 0, 0);
+		else
+			SendMessage(hWnd, WM_ZOOMOUT, 0, 0);
+		break;
+	}
+	case WM_ZOOMIN:
+		g_zoomScale++;
+		if (g_zoomScale > MAXZOOMFACTOR) g_zoomScale = MAXZOOMFACTOR;
+		InvalidateRect(hWnd, NULL, TRUE);
+		break;
+	case WM_ZOOMOUT:
+		g_zoomScale--;
+		if (g_zoomScale <= 1) g_zoomScale = 1;
+		InvalidateRect(hWnd, NULL, TRUE);
+		break;
+	case WM_SELECTALL: // Select area over all monitors
+	{
+		if (g_hBitmap == NULL) break;
+		BITMAP bm;
+		if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0)
 		{
-			if (g_hBitmap == NULL) break;
-			BITMAP bm;
-			if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0)
-			{
-				g_appState = statePointB;
-				g_selection.left = limitXtoBitmap(0);
-				g_selection.top = limitYtoBitmap(0);
-				g_selection.right = limitXtoBitmap(bm.bmWidth - 1);
-				g_selection.bottom = limitYtoBitmap(bm.bmHeight - 1);
-				InvalidateRect(hWnd, NULL, TRUE);
-				// Do not SetCursorPos, because this can make trouble on multimonitor systems with different resolutions
+			g_appState = statePointB;
+			g_selection.left = limitXtoBitmap(0);
+			g_selection.top = limitYtoBitmap(0);
+			g_selection.right = limitXtoBitmap(bm.bmWidth - 1);
+			g_selection.bottom = limitYtoBitmap(bm.bmHeight - 1);
+			InvalidateRect(hWnd, NULL, TRUE);
+			// Do not SetCursorPos, because this can make trouble on multimonitor systems with different resolutions
+		}
+		break;
+	}
+	case WM_STARTED: // Start new capture
+	{
+		// Skip caputure, when a modal dialog is running
+		if (WaitForSingleObject(g_hSemaphoreModalBlocked, 0) != WAIT_OBJECT_0) break;
+		ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+
+		startCaptureGUI(hWnd);
+		break;
+	}
+	case WM_GOTOTRAY: // Hide window and goto tray icon
+	{
+		if (g_onetimeCapture) DestroyWindow(hWnd); // Exit program in onetimeCapture mode
+		KillTimer(hWnd, IDT_TIMER1000MS);
+		KillTimer(hWnd, IDT_TIMER5000MS);
+		ShowCursor(true);
+		ShowWindow(hWnd, SW_HIDE);
+		g_appState = stateTrayIcon;
+		SetActiveWindow(g_activeWindow);
+		break;
+	}
+	case WM_NEXTSTATE: // Enter was pressed or left mouse button was clicked => Goto next state
+		if (g_appState == stateFirstPoint) // Set point A
+		{
+			if (wParam != 0) { // Left mouse was clicked
+				g_selection.left = limitXtoBitmap(GET_X_LPARAM(lParam));
+				g_selection.top = limitYtoBitmap(GET_Y_LPARAM(lParam));
+				g_selection.right = g_selection.left;
+				g_selection.bottom = g_selection.top;
 			}
-			break;
+			else
+			{ // Enter was pressed
+				g_selection.right = g_selection.left;
+				g_selection.bottom = g_selection.top;
+			}
+			g_appState = statePointB;
+			InvalidateRect(hWnd, NULL, TRUE);
+			SetTimer(hWnd, IDT_TIMER1000MS, 1000, (TIMERPROC)NULL);
+			// Reset zoom
+			g_zoomScale = getDWORDSettingFromRegistry(defaultZoomScale);
 		}
-		case WM_STARTED: // Start new capture
+		else
+		{ // Save selection
+			if ((g_appState == statePointA) || (g_appState == statePointB))
+			{
+				if ((g_selection.left != g_selection.right) && (g_selection.top != g_selection.bottom))
+				{
+					SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
+					saveSelection(hWnd);
+				}
+			}
+		}
+		break;
+	case WM_TRAYICON: // Tray icon messages
+		switch (lParam)
 		{
-			// Skip caputure, when a modal dialog is running
-			if (WaitForSingleObject(g_hSemaphoreModalBlocked, 0) != WAIT_OBJECT_0) break;
+		case WM_RBUTTONUP: // Right click on tray icon => Context menu
+		{
+			// Skip menu, when a modal dialog is running
+			if (WaitForSingleObject(g_hSemaphoreModalBlocked, 0) != WAIT_OBJECT_0)
+			{
+				SetForegroundWindow(hWnd); // Bring modal dialog in foreground
+				break;
+			}
 			ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 
-			startCaptureGUI(hWnd);
-			break;
-		}
-		case WM_GOTOTRAY: // Hide window and goto tray icon
-		{
-			if (g_onetimeCapture) DestroyWindow(hWnd); // Exit program in onetimeCapture mode
-			KillTimer(hWnd, IDT_TIMER1000MS);
-			KillTimer(hWnd, IDT_TIMER5000MS);
-			ShowCursor(true);
-			ShowWindow(hWnd, SW_HIDE);
-			g_appState = stateTrayIcon;
-			SetActiveWindow(g_activeWindow);
-			break;
-		}
-		case WM_NEXTSTATE: // Enter was pressed or left mouse button was clicked => Goto next state
-			if (g_appState == stateFirstPoint) // Set point A
-			{
-				if (wParam != 0) { // Left mouse was clicked
-					g_selection.left = limitXtoBitmap(GET_X_LPARAM(lParam));
-					g_selection.top = limitYtoBitmap(GET_Y_LPARAM(lParam));
-					g_selection.right = g_selection.left;
-					g_selection.bottom = g_selection.top;
-				}
-				else
-				{ // Enter was pressed
-					g_selection.right = g_selection.left;
-					g_selection.bottom = g_selection.top;
-				}
-				g_appState = statePointB;
-				InvalidateRect(hWnd, NULL, TRUE);
-				SetTimer(hWnd, IDT_TIMER1000MS, 1000, (TIMERPROC)NULL);
-				// Reset zoom
-				g_zoomScale = getDWORDSettingFromRegistry(defaultZoomScale);
-			}
-			else
-			{ // Save selection
-				if ((g_appState == statePointA) || (g_appState == statePointB))
-				{
-					if ((g_selection.left != g_selection.right) && (g_selection.top != g_selection.bottom))
-					{
-						SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
-						saveSelection(hWnd);
-					}
-				}
-			}
-			break;
-		case WM_TRAYICON: // Tray icon messages
-			switch (lParam)
-			{
-			case WM_RBUTTONUP: // Right click on tray icon => Context menu
-			{
-				// Skip menu, when a modal dialog is running
-				if (WaitForSingleObject(g_hSemaphoreModalBlocked,0) != WAIT_OBJECT_0) 
-				{
-					SetForegroundWindow(hWnd); // Bring modal dialog in foreground
-					break;
-				}
-				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
-
-				POINT pt;
-				GetCursorPos(&pt);
-				HMENU hMenu = CreatePopupMenu();
-				AppendMenu(hMenu, MF_STRING, IDM_CAPTURE, LoadStringAsWstr(g_hInst, IDS_SCREENSHOT).c_str());
-				AppendMenu(hMenu, MF_STRING, IDM_OPENFOLDER, LoadStringAsWstr(g_hInst, IDS_OPENFOLDER).c_str());
-				AppendMenu(hMenu, MF_STRING, IDM_SETFOLDER, LoadStringAsWstr(g_hInst, IDS_SETFOLDER).c_str());
-				AppendMenu(hMenu, MF_STRING | (g_saveToClipboard ? MF_CHECKED : 0), IDM_SAVETOCLIPBOARD, LoadStringAsWstr(g_hInst, IDS_SAVETOCLIPBOARD).c_str());
-				AppendMenu(hMenu, MF_STRING | (g_saveToFile ? MF_CHECKED : 0), IDM_SAVETOFILE, LoadStringAsWstr(g_hInst, IDS_SAVETOFILE).c_str());
-				AppendMenu(hMenu, MF_SEPARATOR | MF_BYPOSITION, 0, NULL);
-				AppendMenu(hMenu, MF_STRING, IDM_ABOUT, LoadStringAsWstr(g_hInst, IDS_ABOUT).c_str());
-				AppendMenu(hMenu, MF_STRING | (getRunRegistryValue() ? MF_CHECKED : 0), IDM_AUTORUN, LoadStringAsWstr(g_hInst, IDS_AUTORUN).c_str());
-				AppendMenu(hMenu, MF_STRING, IDM_EXIT, LoadStringAsWstr(g_hInst, IDS_EXIT).c_str());
-				SetForegroundWindow(hWnd);
-				TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
-				DestroyMenu(hMenu);
-				break;
-			}
-			case WM_LBUTTONDBLCLK: // Double click on tray icon => Open screenshot folder
-				SendMessage(hWnd, WM_COMMAND, IDM_OPENFOLDER, 0);
-				break;
-			}
-			break;
-		case WM_SYSKEYDOWN:
-			if (lParam & (1 << 29)) // Alt pressed
-			{
-				if (wParam == VK_F4) // Alt + F4
-					DestroyWindow(hWnd);
-				else
-					checkCursorButtons(hWnd, wParam, 10); // Move points with cursor buttons with a big step, if a cursor button is pressed
-			}
-			break;
-		case WM_KEYDOWN:
-			checkCursorButtons(hWnd, wParam, 1); // Move points with cursor buttons with a one pixel step, if a cursor button is pressed
-			switch (wParam)
-			{
-			case VK_NEXT: // Page down => Zooom out
-				SendMessage(hWnd, WM_ZOOMOUT, 0, 0);
-				break;
-			case VK_PRIOR: // Page up => Zoom in
-				SendMessage(hWnd, WM_ZOOMIN, 0, 0);
-				break;
-			case 'A': // A => Select all
-				SendMessage(hWnd, WM_SELECTALL, 0, 0);
-				break;
-			case 'M': // M => Select next monitor
-				if (g_rectMonitor.size() > 0)
-				{
-					g_selectedMonitor++;
-					if (g_selectedMonitor >= g_rectMonitor.size()) g_selectedMonitor = 0;
-
-					g_appState = statePointB;
-					g_selection.left = limitXtoBitmap(g_rectMonitor[g_selectedMonitor].left - g_appWindowPos.x);
-					g_selection.top = limitYtoBitmap(g_rectMonitor[g_selectedMonitor].top - g_appWindowPos.y);
-					g_selection.right = limitXtoBitmap(g_rectMonitor[g_selectedMonitor].right - g_appWindowPos.x - 1);
-					g_selection.bottom = limitYtoBitmap(g_rectMonitor[g_selectedMonitor].bottom - g_appWindowPos.y - 1);
-					MySetCursorPos(g_selection.right, g_selection.bottom);
-					InvalidateRect(hWnd, NULL, TRUE);
-				}
-				break;
-			case 'C': // C => Toggle save to clipboard
-				SendMessage(hWnd, WM_COMMAND, IDM_SAVETOCLIPBOARD, 0);
-				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			case 'F': // F => Toggle save to file
-				SendMessage(hWnd, WM_COMMAND, IDM_SAVETOFILE, 0);
-				break;
-			case 'S': // S => Toogle colors
-				SendMessage(hWnd, WM_COMMAND, IDM_ALTERNATIVECOLORS, 0);
-				break;
-			case 'P': // P => Pixelate
-				if ((g_appState == statePointB) || (g_appState == statePointA))
-				{
-					pixelateScreenshotRect(g_selection, PIXELATEFACTOR);
-					g_selection.right = UNINITIALIZEDLONG;
-					g_selection.bottom = UNINITIALIZEDLONG;
-					g_appState = stateFirstPoint;
-					MySetCursorPos(g_selection.left, g_selection.top);
-					InvalidateRect(hWnd, NULL, TRUE);
-				}
-				break;
-			case 'B': // B => Mark selection
-				if ((g_appState == statePointB) || (g_appState == statePointA))
-				{
-					markScreenshotRect(g_selection, MARKEDWIDTH, MARKEDALPHA);
-					g_selection.right = UNINITIALIZEDLONG;
-					g_selection.bottom = UNINITIALIZEDLONG;
-					g_appState = stateFirstPoint;
-					MySetCursorPos(g_selection.left, g_selection.top);
-					InvalidateRect(hWnd, NULL, TRUE);
-				}
-				break;
-			case VK_INSERT: // Insert => Store selection
-				if (isSelectionValid(g_selection))
-				{
-					g_storedSelection = g_selection;
-					storeDWORDSettingInRegistry(storedSelectionLeft, g_selection.left);
-					storeDWORDSettingInRegistry(storedSelectionTop, g_selection.top);
-					storeDWORDSettingInRegistry(storedSelectionRight, g_selection.right);
-					storeDWORDSettingInRegistry(storedSelectionBottom, g_selection.bottom);
-					InvalidateRect(hWnd, NULL, TRUE);
-				}
-				break;
-			case VK_DELETE: // Delete => Clear stored and used selection
-			{
-				g_storedSelection = { UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG };
-				storeDWORDSettingInRegistry(storedSelectionLeft, UNINITIALIZEDLONG);
-				storeDWORDSettingInRegistry(storedSelectionTop, UNINITIALIZEDLONG);
-				storeDWORDSettingInRegistry(storedSelectionRight, UNINITIALIZEDLONG);
-				storeDWORDSettingInRegistry(storedSelectionBottom, UNINITIALIZEDLONG);
-
-				POINT mouse;
-				GetCursorPos(&mouse);
-				g_appState = stateFirstPoint;
-				g_selection.left = limitXtoBitmap(mouse.x - g_appWindowPos.x);
-				g_selection.top = limitYtoBitmap(mouse.y - g_appWindowPos.y);
-				g_selection.right = UNINITIALIZEDLONG;
-				g_selection.bottom = UNINITIALIZEDLONG;
-				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			}
-			case VK_HOME: // Home => Restore selection
-				if (isSelectionValid(g_storedSelection))
-				{
-					g_appState = statePointB;
-					g_selection.left = limitXtoBitmap(g_storedSelection.left);
-					g_selection.right = limitXtoBitmap(g_storedSelection.right);
-					g_selection.top = limitYtoBitmap(g_storedSelection.top);
-					g_selection.bottom = limitYtoBitmap(g_storedSelection.bottom);
-					MySetCursorPos(g_selection.right, g_selection.bottom);
-					InvalidateRect(hWnd, NULL, TRUE);
-				}
-				break;
-			case VK_F1: // F1 => Toggle display information
-				SendMessage(hWnd, WM_COMMAND, IDM_DISPLAYINFORMATION, 0);
-				break;
-			case VK_TAB: // Tab => Toggle between points
-				if (g_appState == statePointA)
-				{
-					g_appState = statePointB;
-					MySetCursorPos(g_selection.right, g_selection.bottom);
-					InvalidateRect(hWnd, NULL, TRUE);
-				}
-				else
-				{
-					if (g_appState == statePointB)
-					{
-						g_appState = statePointA;
-						MySetCursorPos(g_selection.left, g_selection.top);
-						InvalidateRect(hWnd, NULL, TRUE);
-					}
-				}
-				break;
-			}
-			break;
-		case WM_CHAR:
-			switch (wParam)
-			{
-			case VK_ESCAPE: // ESC => cancel capture
-				SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
-				break;
-			case VK_RETURN: // Return => Confirm/OK
-				SendMessage(hWnd, WM_NEXTSTATE, 0, 0);
-				break;
-			case '+': // Increase selection
-				resizeSelection(hWnd, 1);
-				break;
-			case '-': // Decrease selection
-				resizeSelection(hWnd, -1);
-				break;
-			}
-			break;
-		case WM_ERASEBKGND: // Skip WM_ERASEBKGND (and prevents flickering), because we fill the hole client area every WM_PAINT
-			break;
-		case WM_PAINT:
-			OnPaint(hWnd);
-			break;
-		case WM_CLOSE:
-			DestroyWindow(hWnd);
-			break;
-		case WM_DESTROY:
-			PostQuitMessage(0);
-			break;
-		case WM_LBUTTONDOWN: // Left mouse button => Confirm/OK
-			SendMessage(hWnd, WM_NEXTSTATE, wParam, lParam);
-			break;
-		case WM_RBUTTONUP: // Right mouse button => Context menu
-		{
 			POINT pt;
 			GetCursorPos(&pt);
-			if (g_appState != stateTrayIcon) ShowCursor(true);
 			HMENU hMenu = CreatePopupMenu();
-			AppendMenu(hMenu, MF_STRING, IDM_CANCELCAPTURE, LoadStringAsWstr(g_hInst, IDS_CANCELCAPTURE).c_str());
+			AppendMenu(hMenu, MF_STRING, IDM_CAPTURE, LoadStringAsWstr(g_hInst, IDS_SCREENSHOT).c_str());
+			AppendMenu(hMenu, MF_STRING, IDM_OPENFOLDER, LoadStringAsWstr(g_hInst, IDS_OPENFOLDER).c_str());
+			AppendMenu(hMenu, MF_STRING, IDM_SETFOLDER, LoadStringAsWstr(g_hInst, IDS_SETFOLDER).c_str());
+			AppendMenu(hMenu, MF_STRING | (g_saveToClipboard ? MF_CHECKED : 0), IDM_SAVETOCLIPBOARD, LoadStringAsWstr(g_hInst, IDS_SAVETOCLIPBOARD).c_str());
+			AppendMenu(hMenu, MF_STRING | (g_saveToFile ? MF_CHECKED : 0), IDM_SAVETOFILE, LoadStringAsWstr(g_hInst, IDS_SAVETOFILE).c_str());
+			AppendMenu(hMenu, MF_SEPARATOR | MF_BYPOSITION, 0, NULL);
+			AppendMenu(hMenu, MF_STRING, IDM_ABOUT, LoadStringAsWstr(g_hInst, IDS_ABOUT).c_str());
+			AppendMenu(hMenu, MF_STRING | (getRunRegistryValue() ? MF_CHECKED : 0), IDM_AUTORUN, LoadStringAsWstr(g_hInst, IDS_AUTORUN).c_str());
 			AppendMenu(hMenu, MF_STRING, IDM_EXIT, LoadStringAsWstr(g_hInst, IDS_EXIT).c_str());
+			SetForegroundWindow(hWnd);
 			TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
 			DestroyMenu(hMenu);
-			if (g_appState != stateTrayIcon) ShowCursor(false);
 			break;
 		}
-		case WM_MOUSEMOVE: // Mouse moved
-			OnMouseMove(hWnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), (DWORD)wParam);
+		case WM_LBUTTONDBLCLK: // Double click on tray icon => Open screenshot folder
+			SendMessage(hWnd, WM_COMMAND, IDM_OPENFOLDER, 0);
 			break;
-		case WM_TIMER: // Timer...
-			switch (wParam)
+		}
+		break;
+	case WM_SYSKEYDOWN:
+		if (lParam & (1 << 29)) // Alt pressed
+		{
+			if (wParam == VK_F4) // Alt + F4
+				DestroyWindow(hWnd);
+			else
+				checkCursorButtons(hWnd, wParam, 10); // Move points with cursor buttons with a big step, if a cursor button is pressed
+		}
+		break;
+	case WM_KEYDOWN:
+		checkCursorButtons(hWnd, wParam, 1); // Move points with cursor buttons with a one pixel step, if a cursor button is pressed
+		switch (wParam)
+		{
+		case VK_NEXT: // Page down => Zooom out
+			SendMessage(hWnd, WM_ZOOMOUT, 0, 0);
+			break;
+		case VK_PRIOR: // Page up => Zoom in
+			SendMessage(hWnd, WM_ZOOMIN, 0, 0);
+			break;
+		case 'A': // A => Select all
+			SendMessage(hWnd, WM_SELECTALL, 0, 0);
+			break;
+		case 'M': // M => Select next monitor
+			if (g_rectMonitor.size() > 0)
 			{
-			case IDT_TIMER1000MS: // 1s timer
+				g_selectedMonitor++;
+				if (g_selectedMonitor >= g_rectMonitor.size()) g_selectedMonitor = 0;
+
+				g_appState = statePointB;
+				g_selection.left = limitXtoBitmap(g_rectMonitor[g_selectedMonitor].left - g_appWindowPos.x);
+				g_selection.top = limitYtoBitmap(g_rectMonitor[g_selectedMonitor].top - g_appWindowPos.y);
+				g_selection.right = limitXtoBitmap(g_rectMonitor[g_selectedMonitor].right - g_appWindowPos.x - 1);
+				g_selection.bottom = limitYtoBitmap(g_rectMonitor[g_selectedMonitor].bottom - g_appWindowPos.y - 1);
+				MySetCursorPos(g_selection.right, g_selection.bottom);
 				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			case IDT_TIMER5000MS: // Onetime 5s timer
-				KillTimer(hWnd, IDT_TIMER5000MS); // Only one time
-				SendMessage(hWnd, WM_STARTED, 0, 0);
-				break;
 			}
 			break;
-		case WM_COMMAND: // Menu selection
-			switch (LOWORD(wParam))
+		case 'C': // C => Toggle save to clipboard
+			SendMessage(hWnd, WM_COMMAND, IDM_SAVETOCLIPBOARD, 0);
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		case 'F': // F => Toggle save to file
+			SendMessage(hWnd, WM_COMMAND, IDM_SAVETOFILE, 0);
+			break;
+		case 'S': // S => Toogle colors
+			SendMessage(hWnd, WM_COMMAND, IDM_ALTERNATIVECOLORS, 0);
+			break;
+		case 'P': // P => Pixelate
+			if ((g_appState == statePointB) || (g_appState == statePointA))
 			{
-			case IDM_CAPTURE:
-				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
-				{
-					SetTimer(hWnd, IDT_TIMER5000MS, 5000, (TIMERPROC)NULL);
-					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
-				}
-				break;
-			case IDM_EXIT:
-				PostQuitMessage(0);
-				break;
-			case IDM_ABOUT:
-				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
-				{
-					showProgramInformation(hWnd);
-					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
-				}
-				break;
-			case IDM_OPENFOLDER:
-				ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
-				break;
-			case IDM_SETFOLDER:
-				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
-				{
-					changeScreenshotPathAndStorePathToRegistry();
-					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
-				}
-				break;
-			case IDM_SAVETOCLIPBOARD: // Toggle save to clipboard
-				g_saveToClipboard = !g_saveToClipboard;
-				storeDWORDSettingInRegistry(saveToClipboard, g_saveToClipboard);
-				checkScreenshotTargets(hWnd);
+				pixelateScreenshotRect(g_selection, PIXELATEFACTOR);
+				g_selection.right = UNINITIALIZEDLONG;
+				g_selection.bottom = UNINITIALIZEDLONG;
+				g_appState = stateFirstPoint;
+				MySetCursorPos(g_selection.left, g_selection.top);
 				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			case IDM_SAVETOFILE: // Toggle save to file
-				g_saveToFile = !g_saveToFile;
-				storeDWORDSettingInRegistry(saveToFile, g_saveToFile);
-				checkScreenshotTargets(hWnd);
-				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			case IDM_ALTERNATIVECOLORS: // Toggle colors
-				g_useAlternativeColors = !g_useAlternativeColors;
-				storeDWORDSettingInRegistry(useAlternativeColors, g_useAlternativeColors);
-				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			case IDM_DISPLAYINFORMATION: // Toggle display information
-				g_displayInternallnformation = !g_displayInternallnformation;
-				storeDWORDSettingInRegistry(displayInternallnformation, g_displayInternallnformation);
-				InvalidateRect(hWnd, NULL, TRUE);
-				break;
-			case IDM_CANCELCAPTURE: // Cancel screenshot
-				SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
-				break;
-			case IDM_AUTORUN: // Toggle run key value
-				setRunRegistryValue(!getRunRegistryValue());
-				break;
 			}
 			break;
-		case WM_DISPLAYCHANGE:
-			// Goto tray icon, when display changed, to prevent problems when connecting/disconnecting monitors
-			if (g_appState != stateTrayIcon) SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
-			break;
-		default:
-			if (message == WM_TASKBARCREATED) // Recreate tray icon if explorer was restarted
+		case 'B': // B => Mark selection
+			if ((g_appState == statePointB) || (g_appState == statePointA))
 			{
-				Shell_NotifyIcon(NIM_ADD, &g_nid);
-				break;
+				markScreenshotRect(g_selection, MARKEDWIDTH, MARKEDALPHA);
+				g_selection.right = UNINITIALIZEDLONG;
+				g_selection.bottom = UNINITIALIZEDLONG;
+				g_appState = stateFirstPoint;
+				MySetCursorPos(g_selection.left, g_selection.top);
+				InvalidateRect(hWnd, NULL, TRUE);
 			}
-			return DefWindowProc(hWnd, message, wParam, lParam);
+			break;
+		case VK_INSERT: // Insert => Store selection
+			if (isSelectionValid(g_selection))
+			{
+				g_storedSelection = g_selection;
+				storeDWORDSettingInRegistry(storedSelectionLeft, g_selection.left);
+				storeDWORDSettingInRegistry(storedSelectionTop, g_selection.top);
+				storeDWORDSettingInRegistry(storedSelectionRight, g_selection.right);
+				storeDWORDSettingInRegistry(storedSelectionBottom, g_selection.bottom);
+				InvalidateRect(hWnd, NULL, TRUE);
+			}
+			break;
+		case VK_DELETE: // Delete => Clear stored and used selection
+		{
+			g_storedSelection = { UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG };
+			storeDWORDSettingInRegistry(storedSelectionLeft, UNINITIALIZEDLONG);
+			storeDWORDSettingInRegistry(storedSelectionTop, UNINITIALIZEDLONG);
+			storeDWORDSettingInRegistry(storedSelectionRight, UNINITIALIZEDLONG);
+			storeDWORDSettingInRegistry(storedSelectionBottom, UNINITIALIZEDLONG);
+
+			POINT mouse;
+			GetCursorPos(&mouse);
+			g_appState = stateFirstPoint;
+			g_selection.left = limitXtoBitmap(mouse.x - g_appWindowPos.x);
+			g_selection.top = limitYtoBitmap(mouse.y - g_appWindowPos.y);
+			g_selection.right = UNINITIALIZEDLONG;
+			g_selection.bottom = UNINITIALIZEDLONG;
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		}
+		case VK_HOME: // Home => Restore selection
+			if (isSelectionValid(g_storedSelection))
+			{
+				g_appState = statePointB;
+				g_selection.left = limitXtoBitmap(g_storedSelection.left);
+				g_selection.right = limitXtoBitmap(g_storedSelection.right);
+				g_selection.top = limitYtoBitmap(g_storedSelection.top);
+				g_selection.bottom = limitYtoBitmap(g_storedSelection.bottom);
+				MySetCursorPos(g_selection.right, g_selection.bottom);
+				InvalidateRect(hWnd, NULL, TRUE);
+			}
+			break;
+		case VK_F1: // F1 => Toggle display information
+			SendMessage(hWnd, WM_COMMAND, IDM_DISPLAYINFORMATION, 0);
+			break;
+		case VK_TAB: // Tab => Toggle between points
+			if (g_appState == statePointA)
+			{
+				g_appState = statePointB;
+				MySetCursorPos(g_selection.right, g_selection.bottom);
+				InvalidateRect(hWnd, NULL, TRUE);
+			}
+			else
+			{
+				if (g_appState == statePointB)
+				{
+					g_appState = statePointA;
+					MySetCursorPos(g_selection.left, g_selection.top);
+					InvalidateRect(hWnd, NULL, TRUE);
+				}
+			}
+			break;
+		}
+		break;
+	case WM_CHAR:
+		switch (wParam)
+		{
+		case VK_ESCAPE: // ESC => cancel capture
+			SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
+			break;
+		case VK_RETURN: // Return => Confirm/OK
+			SendMessage(hWnd, WM_NEXTSTATE, 0, 0);
+			break;
+		case '+': // Increase selection
+			resizeSelection(hWnd, 1);
+			break;
+		case '-': // Decrease selection
+			resizeSelection(hWnd, -1);
+			break;
+		}
+		break;
+	case WM_ERASEBKGND: // Skip WM_ERASEBKGND (and prevents flickering), because we fill the hole client area every WM_PAINT
+		break;
+	case WM_PAINT:
+		OnPaint(hWnd);
+		break;
+	case WM_CLOSE:
+		DestroyWindow(hWnd);
+		break;
+	case WM_DESTROY:
+		PostQuitMessage(0);
+		break;
+	case WM_LBUTTONDOWN: // Left mouse button => Confirm/OK
+		SendMessage(hWnd, WM_NEXTSTATE, wParam, lParam);
+		break;
+	case WM_RBUTTONUP: // Right mouse button => Context menu
+	{
+		POINT pt;
+		GetCursorPos(&pt);
+		if (g_appState != stateTrayIcon) ShowCursor(true);
+		HMENU hMenu = CreatePopupMenu();
+		AppendMenu(hMenu, MF_STRING, IDM_CANCELCAPTURE, LoadStringAsWstr(g_hInst, IDS_CANCELCAPTURE).c_str());
+		AppendMenu(hMenu, MF_STRING, IDM_EXIT, LoadStringAsWstr(g_hInst, IDS_EXIT).c_str());
+		TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
+		DestroyMenu(hMenu);
+		if (g_appState != stateTrayIcon) ShowCursor(false);
+		break;
+	}
+	case WM_MOUSEMOVE: // Mouse moved
+		OnMouseMove(hWnd, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), (DWORD)wParam);
+		break;
+	case WM_TIMER: // Timer...
+		switch (wParam)
+		{
+		case IDT_TIMER1000MS: // 1s timer
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		case IDT_TIMER5000MS: // Onetime 5s timer
+			KillTimer(hWnd, IDT_TIMER5000MS); // Only one time
+			SendMessage(hWnd, WM_STARTED, 0, 0);
+			break;
+		}
+		break;
+	case WM_COMMAND: // Menu selection
+		switch (LOWORD(wParam))
+		{
+		case IDM_CAPTURE:
+			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+			{
+				SetTimer(hWnd, IDT_TIMER5000MS, 5000, (TIMERPROC)NULL);
+				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+			}
+			break;
+		case IDM_EXIT:
+			PostQuitMessage(0);
+			break;
+		case IDM_ABOUT:
+			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+			{
+				showProgramInformation(hWnd);
+				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+			}
+			break;
+		case IDM_OPENFOLDER:
+			ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
+			break;
+		case IDM_SETFOLDER:
+			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+			{
+				changeScreenshotPathAndStorePathToRegistry();
+				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+			}
+			break;
+		case IDM_SAVETOCLIPBOARD: // Toggle save to clipboard
+			g_saveToClipboard = !g_saveToClipboard;
+			storeDWORDSettingInRegistry(saveToClipboard, g_saveToClipboard);
+			checkScreenshotTargets(hWnd);
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		case IDM_SAVETOFILE: // Toggle save to file
+			g_saveToFile = !g_saveToFile;
+			storeDWORDSettingInRegistry(saveToFile, g_saveToFile);
+			checkScreenshotTargets(hWnd);
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		case IDM_ALTERNATIVECOLORS: // Toggle colors
+			g_useAlternativeColors = !g_useAlternativeColors;
+			storeDWORDSettingInRegistry(useAlternativeColors, g_useAlternativeColors);
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		case IDM_DISPLAYINFORMATION: // Toggle display information
+			g_displayInternallnformation = !g_displayInternallnformation;
+			storeDWORDSettingInRegistry(displayInternallnformation, g_displayInternallnformation);
+			InvalidateRect(hWnd, NULL, TRUE);
+			break;
+		case IDM_CANCELCAPTURE: // Cancel screenshot
+			SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
+			break;
+		case IDM_AUTORUN: // Toggle run key value
+			setRunRegistryValue(!getRunRegistryValue());
+			break;
+		}
+		break;
+	case WM_DISPLAYCHANGE:
+		// Goto tray icon, when display changed, to prevent problems when connecting/disconnecting monitors
+		if (g_appState != stateTrayIcon) SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
+		break;
+	default:
+		if (message == WM_TASKBARCREATED) // Recreate tray icon if explorer was restarted
+		{
+			Shell_NotifyIcon(NIM_ADD, &g_nid);
+			break;
+		}
+		return DefWindowProc(hWnd, message, wParam, lParam);
 	}
 	return 0;
 }

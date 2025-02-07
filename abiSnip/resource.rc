@@ -6,8 +6,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 IDI_ICON ICON "abiSnip.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1, 0, 0, 2
-PRODUCTVERSION 1, 0, 0, 2
+FILEVERSION 1, 0, 0, 3
+PRODUCTVERSION 1, 0, 0, 3
 BEGIN
 	BLOCK "StringFileInfo"
 	BEGIN
@@ -15,12 +15,12 @@ BEGIN
 		BEGIN
 			VALUE "CompanyName", "codingABI"
 			VALUE "FileDescription", "Tool to create screenshots"
-			VALUE "FileVersion", "1.0.0.2"
+			VALUE "FileVersion", "1.0.0.3"
 			VALUE "InternalName", "abiSnip.exe"
 			VALUE "LegalCopyright", "Copyright (C) 2025 codingABI"
 			VALUE "OriginalFilename", "abiSnip.exe"
 			VALUE "ProductName", "abiSnip"
-			VALUE "ProductVersion", "1.0.0.2"
+			VALUE "ProductVersion", "1.0.0.3"
 		END
 	END
 	BLOCK "VarFileInfo"
@@ -49,8 +49,8 @@ END
 STRINGTABLE
 BEGIN
 	IDS_SETFOLDER               "Change folder..."
-	IDS_PROGINFO                "Tool to create screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2025 codingABI"
-	IDS_SAVETOCLIPBOARD         "Save to cipboard"
+	IDS_PROGINFO                "Tool to create screenshots\n©2025 codingABI"
+	IDS_SAVETOCLIPBOARD         "Save to clipboard"
 	IDS_SAVETOFILE              "Save to file"
 	IDS_NOSAVING                "All output target dísabled"
 	IDS_SELECTFOLDER            "Select folder to save the \nscreenshots:"
@@ -85,7 +85,7 @@ END
 STRINGTABLE
 BEGIN
 	IDS_SETFOLDER               "Ordner ändern..."
-	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n\nhttps://github.com/codingABI/abiSnip\n\n©2025 codingABI"
+	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n©2025 codingABI"
 	IDS_SAVETOCLIPBOARD         "In Zwischenablage speichern"
 	IDS_SAVETOFILE              "In Datei speichern"
 	IDS_NOSAVING                "Alle Speicherziele sind deaktiviert"
