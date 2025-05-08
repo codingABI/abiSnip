@@ -18,7 +18,7 @@
 			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
   License: CC0
-  Copyright (c) 2025 codingABI
+  Copyright (c) 2024-2025 codingABI
 
   Commands:
   Print screen = Start screenshot
@@ -61,6 +61,11 @@
 			Recreate tray icon if explorer crashes
   20250207, Change program info MessageBox to TaskDialog (URL and better high dpi support)
             Version update to 1.0.0.3
+  20250423, Close start menu after print screen was pressed (otherwise start menu stays on top)
+  20250430, Add FIX01 (perhaps a problem caused by Omnissa Horizon Client)
+  20250502, Add tray icon context menu entry for opening the last screenshot
+            Version update to 1.0.0.4
+            
 ===================================================================+*/
 
 // For GNU compilers
@@ -145,6 +150,7 @@ enum APPDWORDSETTINGS {
 	storedSelectionTop,
 	storedSelectionRight,
 	storedSelectionBottom,
+	FIX01
 };
 
 // Global Variables:
@@ -166,6 +172,9 @@ HHOOK g_hHook = NULL; // Handle to hook (We use keyboard hook to start fullscree
 HANDLE g_hSemaphoreModalBlocked = NULL; // Semaphore to ensure modal dialogs (even when started by tray icon menu)
 NOTIFYICONDATA g_nid; // Tray icon structure
 UINT WM_TASKBARCREATED = 0; // Windows sends this message when the taskbar is created (Needs RegisterWindowMessage)
+BOOL g_ignoreNextClick = FALSE;
+BOOL g_FIX01 = FALSE; // FIX01: Set window position in fullscreen mode every second to prevent a wrong position 
+std::wstring g_sLastScreenshotFile = L""; // Last used filename
 
 // Function declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -530,6 +539,10 @@ DWORD getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
 		sValueName.assign(L"storedSelectionBottom");
 		dwResult = UNINITIALIZEDLONG;
 		break;
+	case FIX01:
+		sValueName.assign(L"FIX01");
+		dwResult = 0;
+		break;
 	default:
 		OutputDebugString(L"Invalid setting");
 		return 0xFFFFFFFF;
@@ -560,16 +573,16 @@ DWORD getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
 	// Check limits
 	switch (setting)
 	{
-	case defaultZoomScale:
-		if (dwResult < 1) dwResult = 1;
-		if (dwResult > MAXZOOMFACTOR) dwResult = MAXZOOMFACTOR;
-		break;
-	case saveToClipboard:
-	case saveToFile:
-	case useAlternativeColors:
-	case displayInternallnformation:
-		if (dwResult > 1) dwResult = 1;
-		break;
+		case defaultZoomScale:
+			if (dwResult < 1) dwResult = 1;
+			if (dwResult > MAXZOOMFACTOR) dwResult = MAXZOOMFACTOR;
+			break;
+		case saveToClipboard:
+		case saveToFile:
+		case useAlternativeColors:
+		case displayInternallnformation:
+			if (dwResult > 1) dwResult = 1;
+			break;
 	}
 
 	return dwResult;
@@ -908,6 +921,36 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: forceFocus
+
+  Summary:   Force foreground window (=focus)
+
+  Issue: When start menu is opened and print screen is pressed the start menu stays in top of the abiSnip and holds the keyboard focus
+  Workarround: Simulate a mouse click the abiSnip window
+
+  Args:     HWND hWindow
+			  Handle to window
+
+  Returns:
+
+-----------------------------------------------------------------F-F*/
+void forceFocus(HWND hWindow) {
+	POINT mouse;
+	GetCursorPos(&mouse); // Stores current mouse position
+	SetCursorPos(g_appWindowPos.x, g_appWindowPos.y); // Move mouse to left, upper window corner
+
+	INPUT input = { 0 };
+	input.type = INPUT_MOUSE;
+	input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+	SendInput(1, &input, sizeof(INPUT)); // Send left mouse button down
+	input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+	SendInput(1, &input, sizeof(INPUT)); // Send left mouse button up
+
+	SetCursorPos(mouse.x, mouse.y); // Move mouse back to stored position
+	g_ignoreNextClick = TRUE; // Ignore last mouse click
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: enterFullScreen
 
   Summary:   Set program to fullscreen
@@ -1097,6 +1140,8 @@ BOOL SaveBitmapAsPNG(HBITMAP hBitmap, const WCHAR* fileName)
 		delete bitmap;
 	}
 	else bRC = FALSE;
+	
+	if (bRC) g_sLastScreenshotFile = sFullPathWorkingFile;
 	GdiplusShutdown(gdiplusToken);
 	return bRC;
 }
@@ -1174,7 +1219,7 @@ BOOL saveSelection(HWND hWindow)
 			// Create file
 			SYSTEMTIME tLocal;
 			GetLocalTime(&tLocal);
-			wchar_t szFileName[MAX_PATH];
+			wchar_t szFileName[MAX_PATH] = L""; 
 
 #define FILEPATTERN L"Screenshot %04u-%02u-%02u %02d%02d%02d.png"
 			if (_snwprintf_s(szFileName, MAX_PATH, _TRUNCATE, FILEPATTERN, tLocal.wYear, tLocal.wMonth, tLocal.wDay, tLocal.wHour, tLocal.wMinute, tLocal.wSecond) >= 0) {
@@ -2253,7 +2298,10 @@ BOOL OnPaint(HWND hWindow) {
 		else
 			SetTextColor(hdcOutputBuffer, ALTAPPCOLORINV);
 
-		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Virtual desktop [%d,%d] %dx%d", GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
+		int screenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+		int screenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+
+		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Virtual desktop [%d,%d] %dx%d", screenX, screenY, GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN));
 		sDisplayInfos.assign(strData);
 
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Selection [%d,%d] [%d,%d]", g_selection.left, g_selection.top, g_selection.right, g_selection.bottom);
@@ -2281,13 +2329,25 @@ BOOL OnPaint(HWND hWindow) {
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Alternative colors %s", g_useAlternativeColors ? L"On" : L"Off");
 		sDisplayInfos.append(L"\n").append(strData);
 
-		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"State %d appWindow [%d,%d] Selected Monitor %d", g_appState, g_appWindowPos.x, g_appWindowPos.y, g_selectedMonitor);
+		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"State %d appWindow [%d,%d]", g_appState, g_appWindowPos.x, g_appWindowPos.y);
 		sDisplayInfos.append(L"\n").append(strData);
+
+		RECT rectWindow = { 0 };
+		GetWindowRect(hWindow, &rectWindow);
+
+		if ((rectWindow.left != screenX) || (rectWindow.top != screenY)) { 
+			_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L" ([%d,%d]!=[%d,%d])", rectWindow.left, rectWindow.top, screenX, screenY);
+			sDisplayInfos.append(strData);
+		}
+		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L" Has focus %s Selected Monitor %d", (hWindow == GetForegroundWindow()) ? L"Yes" : L"No", g_selectedMonitor);
+		sDisplayInfos.append(strData);
+
 		for (int i = 0; i < (int)g_rectMonitor.size(); i++)
 		{
 			_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Monitor %d [%d,%d] [%d,%d]", i, g_rectMonitor[i].left, g_rectMonitor[i].top, g_rectMonitor[i].right, g_rectMonitor[i].bottom);
 			sDisplayInfos.append(L"\n").append(strData);
 		}
+		
 		sDisplayInfos.append(L"\n\nA = Select all\nM = Select next monitor\nTab = A <-> B\nCursor keys = Move A/B\n")
 			.append(L"Alt+cursor keys = Fast move A/B\nShift+cursor keys = Find color change for A/B\nReturn = OK\nESC = Cancel")
 			.append(L"\n+/- = Increase/decrease selection")
@@ -2295,6 +2355,8 @@ BOOL OnPaint(HWND hWindow) {
 			.append(L"\nInsert = Store selection\nHome = Use stored selection\nDelete = Delete stored and used selection\nP = Pixelate selection\nB = Box around selection")
 			.append(L"\nC = Clipboard On/Off\nF = File On/Off\nS = Alternative colors On/Off")
 			.append(L"\nF1 = Display information On/Off");
+
+		if (g_FIX01) sDisplayInfos.append(L"\nD = FIX01: Window position");
 
 		// Calc text area
 		DrawText(hdcOutputBuffer, sDisplayInfos.c_str(), -1, &rectTextArea, DT_NOCLIP | DT_CALCRECT);
@@ -2437,7 +2499,7 @@ CLEANUP:
 	if (hbmScreenshotOld != NULL) SelectObject(hdcScreenshot, hbmScreenshotOld);
 	if (hdcOutputBuffer != NULL)
 	{
-		// Restore memory device context statte
+		// Restore memory device context state
 		if (hfntPrev != NULL) SelectObject(hdcOutputBuffer, hfntPrev);
 		if (iBackupOutputDC != 0) RestoreDC(hdcOutputBuffer, iBackupOutputDC);
 	}
@@ -2931,8 +2993,21 @@ void startCaptureGUI(HWND hWindow) {
 	// Enable 1s time to show selected point
 	SetTimer(hWindow, IDT_TIMER1000MS, 1000, (TIMERPROC)NULL);
 
+	// Check window position, which is sometimes wrong (perhaps a timing problem or caused by Omnissa Horizon Client)
+	RECT rectWindow = { 0 };
+	GetWindowRect(hWindow, &rectWindow);
+	int screenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
+	int screenY = GetSystemMetrics(SM_YVIRTUALSCREEN);
+
+	if ((rectWindow.left != screenX) || (rectWindow.top != screenY)) { // Reapply fullscreen, if window position is not correct
+		Sleep(500);
+		enterFullScreen(hWindow);
+	}
+	
 	// Force foreground window (Prevents keyboard input focus problems on a second or third monitor)
 	SetForegroundWindowInternal(hWindow);
+	Sleep(10);
+	if (hWindow != GetForegroundWindow()) forceFocus(hWindow);
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -3104,6 +3179,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// Get settings from registry
 	g_saveToFile = getDWORDSettingFromRegistry(saveToFile);
 	g_saveToClipboard = getDWORDSettingFromRegistry(saveToClipboard);
+	g_FIX01 = getDWORDSettingFromRegistry(FIX01);
 	checkScreenshotTargets(g_hWindow);
 	getRunRegistryValue();
 
@@ -3273,6 +3349,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			GetCursorPos(&pt);
 			HMENU hMenu = CreatePopupMenu();
 			AppendMenu(hMenu, MF_STRING, IDM_CAPTURE, LoadStringAsWstr(g_hInst, IDS_SCREENSHOT).c_str());
+			if (!g_sLastScreenshotFile.empty() && PathFileExists(g_sLastScreenshotFile.c_str()) ) {
+				AppendMenu(hMenu, MF_STRING, IDM_OPENLAST, LoadStringAsWstr(g_hInst, IDS_OPENLAST).c_str());
+			} else g_sLastScreenshotFile = L"";
 			AppendMenu(hMenu, MF_STRING, IDM_OPENFOLDER, LoadStringAsWstr(g_hInst, IDS_OPENFOLDER).c_str());
 			AppendMenu(hMenu, MF_STRING, IDM_SETFOLDER, LoadStringAsWstr(g_hInst, IDS_SETFOLDER).c_str());
 			AppendMenu(hMenu, MF_STRING | (g_saveToClipboard ? MF_CHECKED : 0), IDM_SAVETOCLIPBOARD, LoadStringAsWstr(g_hInst, IDS_SAVETOCLIPBOARD).c_str());
@@ -3312,6 +3391,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			break;
 		case 'A': // A => Select all
 			SendMessage(hWnd, WM_SELECTALL, 0, 0);
+			break;
+		case 'D': // FIX01: Window position
+			if (g_FIX01) enterFullScreen(hWnd);
 			break;
 		case 'M': // M => Select next monitor
 			if (g_rectMonitor.size() > 0)
@@ -3452,7 +3534,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		PostQuitMessage(0);
 		break;
 	case WM_LBUTTONDOWN: // Left mouse button => Confirm/OK
-		SendMessage(hWnd, WM_NEXTSTATE, wParam, lParam);
+		if (!g_ignoreNextClick) SendMessage(hWnd, WM_NEXTSTATE, wParam, lParam); else g_ignoreNextClick = FALSE;
 		break;
 	case WM_RBUTTONUP: // Right mouse button => Context menu
 	{
@@ -3475,6 +3557,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		{
 		case IDT_TIMER1000MS: // 1s timer
 			InvalidateRect(hWnd, NULL, TRUE);
+			if (g_FIX01) enterFullScreen(hWnd);
 			break;
 		case IDT_TIMER5000MS: // Onetime 5s timer
 			KillTimer(hWnd, IDT_TIMER5000MS); // Only one time
@@ -3505,6 +3588,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case IDM_OPENFOLDER:
 			ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
 			break;
+		case IDM_OPENLAST:
+		{
+			if (!g_sLastScreenshotFile.empty() && PathFileExists(g_sLastScreenshotFile.c_str()) ) { // Open file if file exists
+				ShellExecute(hWnd, L"open", g_sLastScreenshotFile.c_str(), NULL, NULL, SW_SHOWNORMAL);
+				break;
+			} else g_sLastScreenshotFile = L"";
+			// Otherwise open folder
+			ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
+			break;
+		}
 		case IDM_SETFOLDER:
 			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
 			{
@@ -3547,7 +3640,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (g_appState != stateTrayIcon) SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
 		break;
 	default:
-		if (message == WM_TASKBARCREATED) // Recreate tray icon if explorer was restarted
+		if ((WM_TASKBARCREATED != NULL) && (message == WM_TASKBARCREATED)) // Recreate tray icon if explorer was restarted
 		{
 			Shell_NotifyIcon(NIM_ADD, &g_nid);
 			break;

@@ -6,8 +6,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 IDI_ICON ICON "abiSnip.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1, 0, 0, 3
-PRODUCTVERSION 1, 0, 0, 3
+FILEVERSION 1, 0, 0, 4
+PRODUCTVERSION 1, 0, 0, 4
 BEGIN
 	BLOCK "StringFileInfo"
 	BEGIN
@@ -15,12 +15,12 @@ BEGIN
 		BEGIN
 			VALUE "CompanyName", "codingABI"
 			VALUE "FileDescription", "Tool to create screenshots"
-			VALUE "FileVersion", "1.0.0.3"
+			VALUE "FileVersion", "1.0.0.4"
 			VALUE "InternalName", "abiSnip.exe"
-			VALUE "LegalCopyright", "Copyright (C) 2025 codingABI"
+			VALUE "LegalCopyright", "Copyright (C) 2024-2025 codingABI"
 			VALUE "OriginalFilename", "abiSnip.exe"
 			VALUE "ProductName", "abiSnip"
-			VALUE "ProductVersion", "1.0.0.3"
+			VALUE "ProductVersion", "1.0.0.4"
 		END
 	END
 	BLOCK "VarFileInfo"
@@ -49,10 +49,10 @@ END
 STRINGTABLE
 BEGIN
 	IDS_SETFOLDER               "Change folder..."
-	IDS_PROGINFO                "Tool to create screenshots\n©2025 codingABI"
-	IDS_SAVETOCLIPBOARD         "Save to clipboard"
+	IDS_PROGINFO                "Tool to create screenshots\n©2024-2025 codingABI"
+	IDS_SAVETOCLIPBOARD         "Save to cipboard"
 	IDS_SAVETOFILE              "Save to file"
-	IDS_NOSAVING                "All output target dísabled"
+	IDS_NOSAVING                "All output target disabled"
 	IDS_SELECTFOLDER            "Select folder to save the \nscreenshots:"
 	IDS_CANCELCAPTURE           "Cancel screenshot"
 	IDS_CHANGEFOLDER            "Change folder and retry?"
@@ -61,6 +61,7 @@ END
 STRINGTABLE
 BEGIN
 	IDS_AUTORUN                 "Start program at logon"
+	IDS_OPENLAST                "Open last screenshot..."
 END
 
 /////////////////////////////////////////////////////////////////////////////
@@ -85,7 +86,7 @@ END
 STRINGTABLE
 BEGIN
 	IDS_SETFOLDER               "Ordner ändern..."
-	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n©2025 codingABI"
+	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n©2024-2025 codingABI"
 	IDS_SAVETOCLIPBOARD         "In Zwischenablage speichern"
 	IDS_SAVETOFILE              "In Datei speichern"
 	IDS_NOSAVING                "Alle Speicherziele sind deaktiviert"
@@ -97,6 +98,7 @@ END
 STRINGTABLE
 BEGIN
 	IDS_AUTORUN                 "Programm bei Anmeldung starten"
+	IDS_OPENLAST                "Letzten Screenshot öffnen..."
 END
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID  RT_MANIFEST "abiSnip.manifest"
