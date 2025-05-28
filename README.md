@@ -135,7 +135,7 @@ abiSnip uses registry values under:
 | Registry value | Type | Content | Description | Can be overwritten by [group policy](#group-policy) |
 | --- | --- | --- | --- | --- |
 | defaultZoomScale | REG_DWORD | 1-32 | Initial zoom level for the mouse position while screenshot selection (If this registry value does not exist, the default value is 4) | Yes |
-| DEV | REG_DWORD | 0x0 = Disabled, 0x1 = Enabled | For my internal development use only | No |
+| DEV | REG_DWORD |  | For my internal development use only | No |
 | disablePrintScreenKeyForSnipping | REG_DWORD | 0x1 | Disables the 'Use the Print screen key to open screen capture' option in the Windows settings, to prevent conflicts between abiSnip and the Windows capture tool (Default: This registry value does not exist and the user gets a prompt when needed) | Yes |
 | displayInternalInformation | REG_DWORD | 0x0 = Disabled, 0x1 = Enabled | Displays internal program information while screenshot selection (If this registry value does not exist, the default value is 0x0) | No |
 | saveToClipboard | REG_DWORD | 0x0 = Disabled, 0x1 = Enabled | Copy screenshot automatically to clipboard (If this registry value does not exist, the default value is 0x1) | Yes |
