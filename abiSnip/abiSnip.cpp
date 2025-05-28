@@ -113,9 +113,9 @@
 
 using namespace Gdiplus;
 // Defines
-#define REGISTRYSETTINGSPATH L"SOFTWARE\\CodingABI\\abiSnip" // Registry path under HKCU to store program settings
-#define REGISTRYGPOPATH L"SOFTWARE\\Policies\\CodingABI\\abiSnip" // GPO path under HKLM/HKCU to force program settings
-#define REGISTRYGPODEFAULTSPATH L"SOFTWARE\\Policies\\CodingABI\\abiSnip\\Recommended" // GPO path under HKLM/HKCU for default program settings
+#define REGISTRYSETTINGSPATH L"SOFTWARE\\codingABI\\abiSnip" // Registry path under HKCU to store program settings
+#define REGISTRYGPOPATH L"SOFTWARE\\Policies\\codingABI\\abiSnip" // GPO path under HKLM/HKCU to force program settings
+#define REGISTRYGPODEFAULTSPATH L"SOFTWARE\\Policies\\codingABI\\abiSnip\\Recommended" // GPO path under HKLM/HKCU for default program settings
 #define REGISTRYRUNPATH L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" // Registry path under HKLM/HKCU to start the program at logon
 #define REGISTRYRUNPATHX86 L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run" // Registry path under HKLM on a x64 machine to start the program at logon via the x86 registry
 #define ZOOMWIDTH 32 // Width of zoomwindow (effective pixel size is ZOOMWIDTH * current zoom scale)

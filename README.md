@@ -87,8 +87,8 @@ The settings under **abiSnip - Default Settings (users can override)** are not e
 If a setting is enforced by a group policy the corresponding tray icon context menu entry is grayed out.
 
 Group policy settings will be stored under:
-- HKLM\SOFTWARE\Policies\CodingABI\abiSnip
-- HKCU\SOFTWARE\Policies\CodingABI\abiSnip
+- HKLM\SOFTWARE\Policies\codingABI\abiSnip
+- HKCU\SOFTWARE\Policies\codingABI\abiSnip
 
 ### Command line program arguments
 
@@ -114,9 +114,9 @@ When abiSnip is started with one of these arguments, this new abiSnip instance e
 abiSnip uses registry values under:
 - [HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run](#hklmsoftwaremicrosoftwindowscurrentversionrun)
 - [HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run](#hkcusoftwaremicrosoftwindowscurrentversionrun)
-- [HKCU\SOFTWARE\CodingABI\abiSnip](#hkcusoftwaremicrosoftwindowscurrentversionrun)
-- [HKLM\SOFTWARE\Policies\CodingABI\abiSnip](#group-policy)
-- [HKCU\SOFTWARE\Policies\CodingABI\abiSnip](#group-policy)
+- [HKCU\SOFTWARE\codingABI\abiSnip](#hkcusoftwaremicrosoftwindowscurrentversionrun)
+- [HKLM\SOFTWARE\Policies\codingABI\abiSnip](#group-policy)
+- [HKCU\SOFTWARE\Policies\codingABI\abiSnip](#group-policy)
 
 #### HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run
 
@@ -130,7 +130,7 @@ abiSnip uses registry values under:
 | --- | --- | --- | --- |
 | abiSnip | REG_SZ or [REG_EXPAND_SZ](#reg_expand_sz) | Full quoted path to abiSnip.exe, for example *"C:\abiSnip\abiSnip.exe"* | Starts abiSnip automatically at logon for the current user |
 
-#### HKCU\SOFTWARE\CodingABI\abiSnip
+#### HKCU\SOFTWARE\codingABI\abiSnip
 
 | Registry value | Type | Content | Description | Can be overwritten by [group policy](#group-policy) |
 | --- | --- | --- | --- | --- |
