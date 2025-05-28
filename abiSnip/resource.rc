@@ -6,8 +6,8 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 IDI_ICON ICON "abiSnip.ico"
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 1, 0, 0, 4
-PRODUCTVERSION 1, 0, 0, 4
+FILEVERSION 1, 0, 0, 5
+PRODUCTVERSION 1, 0, 0, 5
 BEGIN
 	BLOCK "StringFileInfo"
 	BEGIN
@@ -15,12 +15,12 @@ BEGIN
 		BEGIN
 			VALUE "CompanyName", "codingABI"
 			VALUE "FileDescription", "Tool to create screenshots"
-			VALUE "FileVersion", "1.0.0.4"
+			VALUE "FileVersion", "1.0.0.5"
 			VALUE "InternalName", "abiSnip.exe"
 			VALUE "LegalCopyright", "Copyright (C) 2024-2025 codingABI"
 			VALUE "OriginalFilename", "abiSnip.exe"
 			VALUE "ProductName", "abiSnip"
-			VALUE "ProductVersion", "1.0.0.4"
+			VALUE "ProductVersion", "1.0.0.5"
 		END
 	END
 	BLOCK "VarFileInfo"
@@ -40,7 +40,7 @@ BEGIN
 	IDS_EXIT                    "Exit program"
 	IDS_ABOUT                   "About..."
 	IDS_OPENFOLDER              "Open screenshot folder..."
-	IDS_SCREENSHOT              "Screenshot (5s delayed)"
+	IDS_SCREENSHOTDELAYED       "Screenshot (%is delayed)"
 	IDS_ERRORCREATING           "Error creating "
 	IDS_ERRORCOPYTOCLIPBOARD    "Could not copy screenshot to clipboard"
 	IDS_HASFAILED               "has failed"
@@ -52,7 +52,7 @@ BEGIN
 	IDS_PROGINFO                "Tool to create screenshots\n©2024-2025 codingABI"
 	IDS_SAVETOCLIPBOARD         "Save to cipboard"
 	IDS_SAVETOFILE              "Save to file"
-	IDS_NOSAVING                "All output target disabled"
+	IDS_TARGETSDISABLED         "All screenshot destinations are disabled"
 	IDS_SELECTFOLDER            "Select folder to save the \nscreenshots:"
 	IDS_CANCELCAPTURE           "Cancel screenshot"
 	IDS_CHANGEFOLDER            "Change folder and retry?"
@@ -62,6 +62,12 @@ STRINGTABLE
 BEGIN
 	IDS_AUTORUN                 "Start program at logon"
 	IDS_OPENLAST                "Open last screenshot..."
+	IDS_EDITLAST                "Edit last screenshot..."
+	IDS_PRINTKEYWARNINGCONTEND  "The setting 'Use the Print screen key to open screen capture' is activated in Windows.\n\nThis can cause abiSnip and the Windows capture tool to interfere with each other.\n\nShould this Windows setting be deactivated?"
+	IDS_PRINTKEYWARNINGMAIN     "Disable 'Use the Print screen key to open screen capture'?"
+	IDS_YES                     "Yes"
+	IDS_NO                      "No"
+	IDS_YESALWAYS               "Yes, always"
 END
 
 /////////////////////////////////////////////////////////////////////////////
@@ -77,7 +83,7 @@ BEGIN
 	IDS_EXIT                    "Programm beenden"
 	IDS_ABOUT                   "Über..."
 	IDS_OPENFOLDER              "Screenshot-Ordner öffnen..."
-	IDS_SCREENSHOT              "Screenshot (5s verzögert)"
+	IDS_SCREENSHOTDELAYED       "Screenshot (%is verzögert)"
 	IDS_ERRORCREATING           "Fehler beim Erstellen von "
 	IDS_ERRORCOPYTOCLIPBOARD    "Screenshot konnte nicht in die Zwischenablage kopiert werden"
 	IDS_HASFAILED               "ist fehlgeschlagen"
@@ -89,7 +95,7 @@ BEGIN
 	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n©2024-2025 codingABI"
 	IDS_SAVETOCLIPBOARD         "In Zwischenablage speichern"
 	IDS_SAVETOFILE              "In Datei speichern"
-	IDS_NOSAVING                "Alle Speicherziele sind deaktiviert"
+	IDS_TARGETSDISABLED         "Alle Speicherziele sind deaktiviert"
 	IDS_SELECTFOLDER            "Ordner für die Speicherung der \nScreenshots:"
 	IDS_CANCELCAPTURE           "Screenshot abbrechen"
 	IDS_CHANGEFOLDER            "Ordner ändern und wiederholen?"
@@ -99,6 +105,13 @@ STRINGTABLE
 BEGIN
 	IDS_AUTORUN                 "Programm bei Anmeldung starten"
 	IDS_OPENLAST                "Letzten Screenshot öffnen..."
+	IDS_EDITLAST                "Letzten Screenshot editieren..."
+	IDS_PRINTKEYWARNINGCONTEND  "Die Einstellung 'Verwenden der Drucktaste zum Öffnen der Bildschirmaufnahme' ist in Windows aktiviert.\n\nDies kann zu dazu führen, dass abiSnip und das Screenshot-Tool von Windows sich gegenseitig stören.\n\nSoll diese Windows-Einstellung deaktiviert werden?"
+	IDS_PRINTKEYWARNINGMAIN     "'Verwenden der Drucktaste zum Öffnen der Bildschirmaufnahme' deaktivieren?"
+	IDS_YES                     "Ja"
+	IDS_NO                      "Nein"
+	IDS_YESALWAYS               "Ja, immer"
+
 END
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID  RT_MANIFEST "abiSnip.manifest"

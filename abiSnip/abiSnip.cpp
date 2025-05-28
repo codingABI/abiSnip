@@ -5,15 +5,17 @@
 			 when the "Print screen" key was pressed
 
 			 Supports:
-			 - Zooming the mouse pointer area
+			 - Zoom to mouse position
 			 - Area selection
 			 - All monitors selection
 			 - Single monitor selection
 			 - Selections can be adjusted by mouse or keyboard
-			 - Folder for PNG files can be set with the context menu of the tray icon
+			 - Screenshots will be saved as PNG files and/or copied to clipboard
+			 - Folder for the PNG files can be set with the context menu of the tray icon
 			 - Filename for a PNG file will be set automatically and contains a timestamp, for example "Screenshot 2024-11-24 100706.png"
 			 - Selection can be pixelated
 			 - Selection can marked with a colored box
+			 - Group policy support
 
 			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
@@ -35,10 +37,10 @@
   Delete = Delete stored and used selection
   +/- = Increase/decrease selection
   PageUp/PageDown, mouse wheel = Zoom In/Out
-  C = Save to clipboard On/Off
-  F = Save to file On/Off
+  C = Save to clipboard On/Off (Can be set/force by GPO)
+  F = Save to file On/Off (Can be set/force by GPO)
   S = Alternative colors On/Off
-  F1 = Display internal information on screen On/Off
+  F1 = Display internal information on screen On/Off (Can be set/force by GPO)
   P = Pixelate selected area
   B = Box around selected area
 
@@ -65,14 +67,25 @@
   20250430, Add FIX01 (perhaps a problem caused by Omnissa Horizon Client)
   20250502, Add tray icon context menu entry for opening the last screenshot
             Version update to 1.0.0.4
-            
+  20250515, Initial zoom level can be set by registry
+  			Screenshot delay can be set by registry
+            Add GPOs (admx/adml) for some settings
+  20250523, Check screenshot folder to be a valid folder
+            Remove temporary FIX01, because finally fixed
+            Enable zoom for mouse position even on small selections
+            Add commandline parameters /re /rd to enable/disable to all users run key
+			Add Snipping Tool 11 on Windows 11 24H2 computers for "Edit last screenshot..."
+			Add option to disable PrintScreenKeyForSnippingEnabled
+            Version update to 1.0.0.5
+
 ===================================================================+*/
 
 // For GNU compilers
 #if defined (__GNUC__)
 #define UNICODE
-#define _WIN32_WINNT 0x0A00
+#define _WIN32_WINNT 0x0602
 #define _MAX_ITOSTR_BASE16_COUNT (8 + 1) // Char length for DWORD to hex conversion
+#define URL_ESCAPE_ASCII_URI_COMPONENT 0x00080000 // Missing in TDM-GCC 9.2.0 shlwapi.h
 #endif
 
 // Includes
@@ -85,6 +98,10 @@
 #include <string>
 #include <sysinfoapi.h>
 #include <vector>
+#pragma warning(push)
+#pragma warning(disable : 4005)
+#include <ntstatus.h>
+#pragma warning(pop)
 #include "resource.h"
 
 // Library-search records for visual studio
@@ -96,12 +113,17 @@
 
 using namespace Gdiplus;
 // Defines
-#define REGISTRYSETTINGPATH L"Software\\CodingABI\\abiSnip" // Regisry path under HKCU to store program settings
-#define REGISTRYRUNPATH L"Software\\Microsoft\\Windows\\CurrentVersion\\Run" // Registry path under HKCU to start the program at logon
+#define REGISTRYSETTINGSPATH L"SOFTWARE\\CodingABI\\abiSnip" // Registry path under HKCU to store program settings
+#define REGISTRYGPOPATH L"SOFTWARE\\Policies\\CodingABI\\abiSnip" // GPO path under HKLM/HKCU to force program settings
+#define REGISTRYGPODEFAULTSPATH L"SOFTWARE\\Policies\\CodingABI\\abiSnip\\Recommended" // GPO path under HKLM/HKCU for default program settings
+#define REGISTRYRUNPATH L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" // Registry path under HKLM/HKCU to start the program at logon
+#define REGISTRYRUNPATHX86 L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run" // Registry path under HKLM on a x64 machine to start the program at logon via the x86 registry
 #define ZOOMWIDTH 32 // Width of zoomwindow (effective pixel size is ZOOMWIDTH * current zoom scale)
 #define ZOOMHEIGHT 32 // Height of zoomwindow (effective pixel size is ZOOMHEIGHT * current zoom scale)
-#define MAXZOOMFACTOR 32 // Max zoom scale
-#define DEFAULTZOOMSCALE 4 // Default zooom scale when selecting point A or B
+#define MAXZOOMSCALE 32 // Max zoom scale
+#define DEFAULTZOOMSCALE 4 // Default zoom scale when selecting point A or B
+#define DEFAULTSCREENSHOTDELAY 5 // Default delay in seconds for a delayed screenshot
+#define MAXSCREENSHOTDELAY 60 // Max delay in seconds for a delayed screenshot
 #define DEFAULTFONT L"Consolas" // Font
 #define DEFAULTSAVETOCLIPBOARD TRUE // TRUE, when screenshot should be saved to clipboard
 #define DEFAULTSAVETOFILE TRUE // TRUE, when screenshot should be saved to a PNG file
@@ -142,15 +164,17 @@ enum APPSTATE {
 // Simple DWORD settings
 enum APPDWORDSETTINGS {
 	defaultZoomScale,
+	screenshotDelay,
 	saveToClipboard,
-	useAlternativeColors,
-	displayInternallnformation,
 	saveToFile,
+	useAlternativeColors,
+	displayInternalInformation,
 	storedSelectionLeft,
 	storedSelectionTop,
 	storedSelectionRight,
 	storedSelectionBottom,
-	FIX01
+	disablePrintScreenKeyForSnipping,
+	DEV
 };
 
 // Global Variables:
@@ -160,26 +184,66 @@ POINT g_appWindowPos; // SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN when fullscreen wa
 HBITMAP g_hBitmap = NULL; // Bitmap for screenshot over all monitors
 RECT g_selection = { UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG }; // Selected screenshot area
 RECT g_storedSelection = { UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG,UNINITIALIZEDLONG }; // Stored selection
-BOOL g_useAlternativeColors = DEFAULTUSEALTERNATIVECOLORS;
-BOOL g_saveToFile = DEFAULTSAVETOFILE;
-BOOL g_saveToClipboard = DEFAULTSAVETOCLIPBOARD;
-BOOL g_displayInternallnformation = DEFAULTSHOWDISPLAYINFORMATION;
+BOOL g_useAlternativeColors = DEFAULTUSEALTERNATIVECOLORS; // TRUE when alternative colors are used
+BOOL g_saveToFile = DEFAULTSAVETOFILE; // TRUE when screenshots are saved as files
+BOOL g_bSaveToFileGPO = FALSE; // TRUE when saving to file is set by a GPO
+BOOL g_saveToClipboard = DEFAULTSAVETOCLIPBOARD; // TRUE when screenshots copied to clipboard
+BOOL g_bSaveToClipboardGPO = FALSE; // TRUE when copy to clipboard is set by a GPO
+BOOL g_displayInternalInformation = DEFAULTSHOWDISPLAYINFORMATION; // TRUE when internal program data are displayed while selecting a screenshot
+BOOL g_bDisplayInternalInformationGPO = FALSE; // TRUE when displaying internal program data is set by GPO
+DWORD g_screenshotDelay = DEFAULTSCREENSHOTDELAY; // Delay in seconds for a delayed screenshot startet via tray icon context menu "Screenshot (Xs delayed)"
+BOOL g_bScreenshotDelayGPO = FALSE; // TRUE when delay is forced by a GPO
+wchar_t g_screenshotPath[MAX_PATH] = L""; // Path for screenshots
+BOOL g_bScreenshotPathGPO = FALSE; // TRUE when path for screenshots is set by a GPO
+BOOL g_bRunKeyReadOnly = FALSE; // TRUE when automatic run via registry is set in HKLM
 BOOL g_onetimeCapture = FALSE; // TRUE in onetimeCapture mode (capture once at program start and exit program afterwards)
 APPSTATE g_appState = stateTrayIcon; // Current program state
 HWND g_activeWindow = NULL; // Active window before program starts fullscreen mode
-int g_zoomScale = DEFAULTZOOMSCALE; // Zoom scale for mouse cursor
+DWORD g_zoomScale = DEFAULTZOOMSCALE; // Zoom scale for mouse cursor
+BOOL g_bZoomScaleGPO = FALSE; // TRUE when initial zoom scale for mouse cursor is forced by GPO
 HHOOK g_hHook = NULL; // Handle to hook (We use keyboard hook to start fullscreen mode, when the "Print screen" key was pressed)
 HANDLE g_hSemaphoreModalBlocked = NULL; // Semaphore to ensure modal dialogs (even when started by tray icon menu)
 NOTIFYICONDATA g_nid; // Tray icon structure
 UINT WM_TASKBARCREATED = 0; // Windows sends this message when the taskbar is created (Needs RegisterWindowMessage)
-BOOL g_ignoreNextClick = FALSE;
-BOOL g_FIX01 = FALSE; // FIX01: Set window position in fullscreen mode every second to prevent a wrong position 
-std::wstring g_sLastScreenshotFile = L""; // Last used filename
+BOOL g_ignoreNextClick = FALSE; // TRUE when focus was force by a simulated click
+std::wstring g_sLastScreenshotFile = L""; // Last used filename (Path + filename + extension)
+BOOL g_bDisablePrintScreenKeyForSnipping = FALSE; // TRUE when should bei disabel PrintScreenKeyForSnipping silently
+BOOL g_bDEV = FALSE; // TRUE when development functions are enabled (only used temporary)
 
 // Function declarations
 ATOM                MyRegisterClass(HINSTANCE hInstance);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+
 void enterFullScreen(HWND);
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: IsWindows11_24H2OrNewer
+
+  Summary:  Checks if OS is newer or equal Windows 11 24H2
+
+  Args:
+
+  Returns:  TRUE = Windows 11 24H2 or newer
+            FALSE = Older then Windows 11 24H2
+
+-----------------------------------------------------------------F-F*/
+typedef NTSTATUS(WINAPI* RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+bool IsWindows11_24H2OrNewer() {
+	HMODULE hMod = GetModuleHandleW(L"ntdll.dll");
+	if (hMod) {
+		RtlGetVersionPtr fxPtr = (RtlGetVersionPtr)GetProcAddress(hMod, "RtlGetVersion");
+		if (fxPtr != nullptr) {
+			RTL_OSVERSIONINFOW rovi = { 0 };
+			rovi.dwOSVersionInfoSize = sizeof(rovi);
+			if (fxPtr(&rovi) == STATUS_SUCCESS) {
+				return (rovi.dwMajorVersion > 10) ||
+					(rovi.dwMajorVersion == 10 && rovi.dwMinorVersion == 0 && rovi.dwBuildNumber >= 26100);
+			}
+		}
+	}
+	return false;
+}
+
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: KeyboardProc
 
@@ -348,6 +412,7 @@ RECT normalizeRectangle(RECT rect)
 -----------------------------------------------------------------F-F*/
 HRESULT CALLBACK programInformationCallbackProc(HWND hWindow, UINT uMsg, WPARAM wParam, LPARAM lParam, LONG_PTR lpRefData) {
 	if (uMsg == TDN_HYPERLINK_CLICKED) {
+		// Open URL
 		ShellExecute(NULL, L"open", (LPCWSTR)lParam, NULL, NULL, SW_SHOWNORMAL);
 	}
 	return S_OK;
@@ -369,7 +434,7 @@ void showProgramInformation(HWND hWindow)
 	std::wstring sTitle(LoadStringAsWstr(g_hInst, IDS_APP_TITLE));
 	std::wstring sMessage(LoadStringAsWstr(g_hInst, IDS_PROGINFO));
 	wchar_t szExecutable[MAX_PATH];
-	GetModuleFileName(NULL, szExecutable, MAX_PATH);
+	if (GetModuleFileName(NULL, szExecutable, MAX_PATH) == 0) return;
 
 	DWORD  verHandle = 0;
 	UINT   size = 0;
@@ -379,6 +444,7 @@ void showProgramInformation(HWND hWindow)
 	if (verSize != 0) {
 		BYTE* verData = new BYTE[verSize];
 
+		// Get verions information from EXE file
 		if (GetFileVersionInfo(szExecutable, verHandle, verSize, verData))
 		{
 			if (VerQueryValue(verData, L"\\", (VOID FAR * FAR*) & lpBuffer, &size))
@@ -402,6 +468,19 @@ void showProgramInformation(HWND hWindow)
 		delete[] verData;
 	}
 
+	// Add flag for DEV enabled
+	if (g_bDEV) sTitle.append(L" DEV");
+
+	// Add architecture for binary
+	#ifdef _WIN64
+	sTitle.append(L" x64");
+	#else
+
+	#ifdef _WIN32
+	sTitle.append(L" x86");
+	#endif
+
+	#endif
 
 	int nButtonPressed = 0;
 	TASKDIALOGCONFIG config = { 0 };
@@ -433,17 +512,34 @@ void showProgramInformation(HWND hWindow)
 void showProgramArguments(HWND hWindow)
 {
 	std::wstring sTitle(LoadStringAsWstr(g_hInst, IDS_APP_TITLE));
-	std::wstring sMessage = L"";
+	std::wstring sContent = L"";
+	wchar_t szFullPath[MAX_PATH] = L"";
+    if (GetModuleFileName(NULL, szFullPath, MAX_PATH) == 0) return;
+	std::wstring sMain = PathFindFileName(szFullPath);
+	sMain.append(L" [/af] [/ac] | [/f | /rd | /re | /s | /v | /?]");
 
-	sMessage.assign(L"abisnip.exe [/af] [/ac] [/f] [/s] [/v] [/?]\n")
+	sContent
 		.append(L"/ac Create and save screenshot to clipboard\n")
 		.append(L"/af Create and save screenshot to file\n")
 		.append(L"/f Open screenshot folder\n")
-		.append(L"/s One-time manual screenshot\n")
+		.append(L"/rd Disable program start at logon for all users\n")
+		.append(L"/re Enable program start at logon for all users\n")
+		.append(L"/s Open screenshot selection\n")
 		.append(L"/v Show version information\n")
 		.append(L"/? Show this dialog");
 
-	MessageBox(hWindow, sMessage.c_str(), sTitle.c_str(), MB_OK);
+	int nButtonPressed = 0;
+	TASKDIALOGCONFIG config = { 0 };
+	config.cbSize = sizeof(config);
+	config.hInstance = g_hInst;
+	config.hwndParent = hWindow;
+	config.pszMainIcon = MAKEINTRESOURCE(IDI_ICON);
+	config.pszWindowTitle = sTitle.c_str();
+	config.dwCommonButtons = TDCBF_OK_BUTTON;
+	config.pszMainInstruction = sMain.c_str();
+	config.pszContent = sContent.c_str();
+
+	TaskDialogIndirect(&config, &nButtonPressed, NULL, NULL);
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -460,7 +556,7 @@ void checkScreenshotTargets(HWND hWindow) {
 	if (!g_saveToClipboard && !g_saveToFile) // Clipboard and file was disabled by user => Warning
 	{
 		if (g_appState != stateTrayIcon) ShowCursor(true);
-		MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_NOSAVING).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
+		MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_TARGETSDISABLED).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONWARNING);
 		if (g_appState != stateTrayIcon) ShowCursor(false);
 	}
 }
@@ -485,6 +581,172 @@ BOOL isSelectionValid(RECT rect)
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: deleteValueFromRegistry
+
+  Summary:   Deletes a value from registry
+
+  Args:     HKEY hKey
+              Registry key used as root
+            LPCWSTR lpSubKey
+              Registry key
+			LPCWSTR lpValueName
+			  Registry value
+
+  Returns:	LSTATUS
+			  ERROR_SUCCESS = Success
+			  Return codes from Winerror.h
+
+-----------------------------------------------------------------F-F*/
+LSTATUS deleteValueFromRegistry(HKEY hkRoot, LPCWSTR lpSubKey, LPCWSTR lpValueName)
+{
+	LSTATUS lsResult = ERROR_SUCCESS;
+
+	if (lpSubKey == NULL) return ERROR_INVALID_PARAMETER;
+	if (lpValueName == NULL) return ERROR_INVALID_PARAMETER;
+
+	HKEY hKey = NULL;
+	lsResult = RegOpenKeyEx(hkRoot, lpSubKey, 0, KEY_SET_VALUE, &hKey);
+	if (lsResult == ERROR_SUCCESS) {
+		lsResult = RegDeleteValue(hKey, lpValueName);
+		if ((lsResult == ERROR_SUCCESS) || (lsResult == ERROR_FILE_NOT_FOUND)) {
+			lsResult = ERROR_SUCCESS;
+		}
+		RegCloseKey(hKey);
+	} else {
+		if (lsResult == ERROR_PATH_NOT_FOUND) return ERROR_SUCCESS;
+	}
+	return lsResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: getSZFromRegistry
+
+  Summary:   Gets REG_SZ value from registry
+
+  Args:     HKEY hKey
+              Registry key used as root
+            LPCWSTR lpSubKey
+              Registry key
+			LPCWSTR lpValueName
+			  Registry value
+			wchar_t *pszValue
+			  Pointer to wchar_t array where result of registry value will be stored
+			DWORD dwMaxValueWChars
+			  Max chars for wchar_t array where result of registry value will be stored (including null termination)
+
+  Returns:	BOOL
+			  TRUE = Success
+			  FALSE = Failed
+
+-----------------------------------------------------------------F-F*/
+BOOL getSZFromRegistry(HKEY hKey,LPCWSTR lpSubKey, LPCWSTR lpValueName, wchar_t *pszValue, DWORD dwMaxValueWChars)
+{
+	BOOL bResult = FALSE;
+	if (lpSubKey == NULL) return FALSE;
+	if (lpValueName == NULL) return FALSE;
+	if (pszValue == NULL) return FALSE;
+
+	*pszValue = L'\0';
+	DWORD valueSize = 0;
+	DWORD keyType = 0;
+
+	// Get size of registry value
+	if (RegGetValue(hKey, lpSubKey, lpValueName, RRF_RT_REG_SZ, &keyType, NULL, &valueSize) == ERROR_SUCCESS)
+	{
+		if ((valueSize > 0) && (valueSize <= (dwMaxValueWChars + 1) * sizeof(WCHAR))) // Size OK?
+		{
+			// Get registry value
+			valueSize = dwMaxValueWChars * sizeof(WCHAR); // Max size incl. termination
+			if (RegGetValue(hKey, lpSubKey, lpValueName, RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, pszValue, &valueSize) == ERROR_SUCCESS)
+			{
+				bResult = TRUE;
+			}
+		}
+	}
+	return bResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: getDWORDValueFromRegistry
+
+  Summary:   Gets REG_DWORD value from registry
+
+  Args:     HKEY hKey
+              Registry key used as root
+            LPCWSTR lpSubKey
+              Registry key
+			LPCWSTR lpValueName
+			  Registry value
+			DWORD &dwValue
+			  Receives the value's data
+
+  Returns:	LSTATUS
+			  ERROR_SUCCESS = Success
+			  Return codes from Winerror.h
+
+-----------------------------------------------------------------F-F*/
+LSTATUS getDWORDValueFromRegistry(HKEY hkRoot,LPCWSTR lpSubKey, LPCWSTR lpValueName, DWORD &dwValue)
+{
+	HKEY hKey;
+	DWORD dwSize = sizeof(DWORD);
+	LSTATUS lsResult = ERROR_SUCCESS;
+
+	if (lpSubKey == NULL) return ERROR_INVALID_PARAMETER;
+	if (lpValueName == NULL) return ERROR_INVALID_PARAMETER;
+
+	// Open registry key
+	lsResult = RegOpenKeyEx(hkRoot, lpSubKey, 0, KEY_READ, &hKey);
+	if (lsResult == ERROR_SUCCESS) {
+		// Read value from registry
+		lsResult = RegQueryValueEx(hKey, lpValueName, NULL, NULL, (LPBYTE)&dwValue, &dwSize);
+		RegCloseKey(hKey);
+	}
+	return lsResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: setDWORDValueToRegistry
+
+  Summary:   Sets REG_DWORD value to registry
+
+  Args:     HKEY hKey
+              Registry key used as root
+            LPCWSTR lpSubKey
+              Registry key
+			LPCWSTR lpValueName
+			  Registry value
+			DWORD dwValue
+			  Content of value to set
+
+  Returns:	LSTATUS
+			  ERROR_SUCCESS = Success
+			  Return codes from Winerror.h
+
+-----------------------------------------------------------------F-F*/
+LSTATUS setDWORDValueToRegistry(HKEY hkRoot,LPCWSTR lpSubKey, LPCWSTR lpValueName, DWORD dwValue)
+{
+	HKEY hKey;
+	DWORD dwSize = sizeof(DWORD);
+	LSTATUS lsResult = ERROR_SUCCESS;
+
+	if (lpSubKey == NULL) return ERROR_INVALID_PARAMETER;
+	if (lpValueName == NULL) return ERROR_INVALID_PARAMETER;
+
+	// Open registry key
+	lsResult = RegCreateKeyEx(hkRoot, lpSubKey, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL);
+	if (lsResult == ERROR_SUCCESS) {
+
+		// Write to registry
+		lsResult = RegSetValueEx(hKey, lpValueName, 0, REG_DWORD, (const BYTE*)&dwValue, sizeof(dwValue));
+		if (lsResult != ERROR_SUCCESS) {
+			OutputDebugString(L"Error writing to registry");
+		}
+		RegCloseKey(hKey);
+	}
+	return lsResult;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: getDWORDSettingFromRegistry
 
   Summary:   Gets stored DWORD setting from registry
@@ -492,100 +754,150 @@ BOOL isSelectionValid(RECT rect)
   Args:      APPDWORDSETTINGS setting
 			   Setting
 
-  Returns:	DWORD
-			  Setting from registry
-			  0xFFFFFFFF = Error
+  Returns:	BOOL
+			  TRUE = Success
+			  FALSE = Error
 
 -----------------------------------------------------------------F-F*/
-DWORD getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
-	DWORD dwResult = 0;
+BOOL getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
+	DWORD dwValue = 0;
+	BOOL bFound = FALSE;
 
 	std::wstring sValueName = L"";
 	switch (setting)
 	{
-	case defaultZoomScale:
-		sValueName.assign(L"defaultZoomScale");
-		dwResult = DEFAULTZOOMSCALE;
-		break;
-	case saveToClipboard:
-		sValueName.assign(L"saveToClipboard");
-		dwResult = DEFAULTSAVETOCLIPBOARD;
-		break;
-	case saveToFile:
-		sValueName.assign(L"saveToFile");
-		dwResult = DEFAULTSAVETOFILE;
-		break;
-	case useAlternativeColors:
-		sValueName.assign(L"useAlternativeColors");
-		dwResult = DEFAULTUSEALTERNATIVECOLORS;
-		break;
-	case displayInternallnformation:
-		sValueName.assign(L"displayInternallnformation");
-		dwResult = DEFAULTSHOWDISPLAYINFORMATION;
-		break;
-	case storedSelectionLeft:
-		sValueName.assign(L"storedSelectionLeft");
-		dwResult = UNINITIALIZEDLONG;
-		break;
-	case storedSelectionTop:
-		sValueName.assign(L"storedSelectionTop");
-		dwResult = UNINITIALIZEDLONG;
-		break;
-	case storedSelectionRight:
-		sValueName.assign(L"storedSelectionRight");
-		dwResult = UNINITIALIZEDLONG;
-		break;
-	case storedSelectionBottom:
-		sValueName.assign(L"storedSelectionBottom");
-		dwResult = UNINITIALIZEDLONG;
-		break;
-	case FIX01:
-		sValueName.assign(L"FIX01");
-		dwResult = 0;
-		break;
-	default:
-		OutputDebugString(L"Invalid setting");
-		return 0xFFFFFFFF;
+		case defaultZoomScale: sValueName.assign(L"defaultZoomScale"); break;
+		case screenshotDelay: sValueName.assign(L"screenshotDelay"); break;
+		case saveToClipboard: sValueName.assign(L"saveToClipboard"); break;
+		case saveToFile: sValueName.assign(L"saveToFile"); break;
+		case useAlternativeColors: sValueName.assign(L"useAlternativeColors"); break;
+		case displayInternalInformation: sValueName.assign(L"displayInternalInformation"); break;
+		case storedSelectionLeft: sValueName.assign(L"storedSelectionLeft"); break;
+		case storedSelectionTop: sValueName.assign(L"storedSelectionTop"); break;
+		case storedSelectionRight: sValueName.assign(L"storedSelectionRight"); break;
+		case storedSelectionBottom: sValueName.assign(L"storedSelectionBottom"); break;
+		case disablePrintScreenKeyForSnipping: sValueName.assign(L"disablePrintScreenKeyForSnipping"); break;
+		case DEV: sValueName.assign(L"DEV"); break;
+		default: OutputDebugString(L"Invalid setting");	return FALSE;
 	}
 	if (sValueName.empty())
 	{
 		OutputDebugString(L"Invalid setting");
-		return 0xFFFFFFFF;
+		return FALSE;
 	}
 
-	HKEY hKey;
-	DWORD dwValue;
-	DWORD dwSize = sizeof(DWORD);
-	LONG lResult;
+	// Reset GPO flag
+	switch (setting)
+	{
+		case screenshotDelay: g_bScreenshotDelayGPO = FALSE; break;
+		case saveToClipboard: g_bSaveToClipboardGPO = FALSE; break;
+		case saveToFile: g_bSaveToFileGPO = FALSE; break;
+		case displayInternalInformation: g_bDisplayInternalInformationGPO = FALSE; break;
+	}
 
-	// Open registry value
-	lResult = RegOpenKeyEx(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, 0, KEY_READ, &hKey);
-	if (lResult == ERROR_SUCCESS) {
-
-		// Read value from registry
-		lResult = RegQueryValueEx(hKey, sValueName.c_str(), NULL, NULL, (LPBYTE)&dwValue, &dwSize);
-		if (lResult == ERROR_SUCCESS) {
-			dwResult = dwValue;
+	// Check GPO settings
+	switch (setting)
+	{
+		case defaultZoomScale:
+		case screenshotDelay:
+		case saveToClipboard:
+		case saveToFile:
+		case displayInternalInformation:
+		case disablePrintScreenKeyForSnipping:
+		{
+			// Get stored path from GPO or registry
+			if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_CURRENT_USER, REGISTRYGPOPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
+			if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYGPOPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
+			break;
 		}
-		RegCloseKey(hKey);
+	}
+	if (bFound) switch (setting)
+	{
+		case screenshotDelay: g_bScreenshotDelayGPO = TRUE; break;
+		case saveToClipboard: g_bSaveToClipboardGPO = TRUE; break;
+		case saveToFile: g_bSaveToFileGPO = TRUE; break;
+		case displayInternalInformation: g_bDisplayInternalInformationGPO = TRUE; break;
+	}
+
+	// User registry value
+	if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_CURRENT_USER, REGISTRYSETTINGSPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
+
+	// Failback to GPO default settings, if not found
+	if (!bFound) switch (setting)
+	{
+		case defaultZoomScale:
+		case screenshotDelay:
+		case saveToClipboard:
+		case saveToFile:
+		case displayInternalInformation:
+		case disablePrintScreenKeyForSnipping:
+		{
+			// Get stored path from GPO default settings
+			if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_CURRENT_USER, REGISTRYGPODEFAULTSPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
+			if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYGPODEFAULTSPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
+			break;
+		}
+	}
+
+	// Use program defaults, if not found
+	if (!bFound) switch (setting)
+	{
+		case defaultZoomScale: dwValue = DEFAULTZOOMSCALE; break;
+		case screenshotDelay: dwValue = DEFAULTSCREENSHOTDELAY; break;
+		case saveToClipboard: dwValue = DEFAULTSAVETOCLIPBOARD; break;
+		case saveToFile: dwValue = DEFAULTSAVETOFILE; break;
+		case useAlternativeColors: dwValue = DEFAULTUSEALTERNATIVECOLORS; break;
+		case displayInternalInformation: dwValue = DEFAULTSHOWDISPLAYINFORMATION; break;
+		case storedSelectionLeft: dwValue = UNINITIALIZEDLONG; break;
+		case storedSelectionTop: dwValue = UNINITIALIZEDLONG; break;
+		case storedSelectionRight: dwValue = UNINITIALIZEDLONG; break;
+		case storedSelectionBottom: dwValue = UNINITIALIZEDLONG; break;
+		case disablePrintScreenKeyForSnipping: dwValue = FALSE; break;
+		case DEV: dwValue = 0; break;
+		default: OutputDebugString(L"Invalid setting");	return FALSE;
 	}
 
 	// Check limits
 	switch (setting)
 	{
 		case defaultZoomScale:
-			if (dwResult < 1) dwResult = 1;
-			if (dwResult > MAXZOOMFACTOR) dwResult = MAXZOOMFACTOR;
+			if (dwValue < 1) dwValue = 1;
+			if (dwValue > MAXZOOMSCALE) dwValue = MAXZOOMSCALE;
+			break;
+		case screenshotDelay:
+			if (dwValue < 1) dwValue = 1;
+			if (dwValue > MAXSCREENSHOTDELAY) dwValue = MAXSCREENSHOTDELAY;
 			break;
 		case saveToClipboard:
 		case saveToFile:
 		case useAlternativeColors:
-		case displayInternallnformation:
-			if (dwResult > 1) dwResult = 1;
+		case displayInternalInformation:
+			if (dwValue > 1) dwValue = 1;
+			break;
+		case disablePrintScreenKeyForSnipping:
+			if (dwValue > 1) dwValue = 1;
 			break;
 	}
 
-	return dwResult;
+	switch (setting)
+	{
+		case defaultZoomScale: g_zoomScale = dwValue; break;
+		case screenshotDelay: g_screenshotDelay = dwValue; break;
+		case saveToClipboard: g_saveToClipboard = dwValue; break;
+		case saveToFile: g_saveToFile = dwValue; break;
+		case useAlternativeColors: g_useAlternativeColors = dwValue; break;
+		case displayInternalInformation: g_displayInternalInformation = dwValue; break;
+		case storedSelectionLeft: g_storedSelection.left = dwValue; break;
+		case storedSelectionTop: g_storedSelection.top = dwValue; break;
+		case storedSelectionRight: g_storedSelection.right = dwValue; break;
+		case storedSelectionBottom: g_storedSelection.bottom = dwValue; break;
+		case disablePrintScreenKeyForSnipping: g_bDisablePrintScreenKeyForSnipping = dwValue; break;
+		case DEV: g_bDEV = dwValue; break;
+		default:
+			OutputDebugString(L"Invalid setting");
+			return FALSE;
+	};
+	return TRUE;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -604,14 +916,9 @@ DWORD getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
 
 -----------------------------------------------------------------F-F*/
 BOOL storeDWORDSettingInRegistry(APPDWORDSETTINGS setting, DWORD dwValue) {
-	BOOL bResult = TRUE;
-
 	std::wstring sValueName = L"";
 	switch (setting)
 	{
-	case defaultZoomScale:
-		sValueName.assign(L"defaultZoomScale");
-		break;
 	case saveToClipboard:
 		sValueName.assign(L"saveToClipboard");
 		break;
@@ -621,8 +928,8 @@ BOOL storeDWORDSettingInRegistry(APPDWORDSETTINGS setting, DWORD dwValue) {
 	case useAlternativeColors:
 		sValueName.assign(L"useAlternativeColors");
 		break;
-	case displayInternallnformation:
-		sValueName.assign(L"displayInternallnformation");
+	case displayInternalInformation:
+		sValueName.assign(L"displayInternalInformation");
 		break;
 	case storedSelectionLeft:
 		sValueName.assign(L"storedSelectionLeft");
@@ -636,6 +943,9 @@ BOOL storeDWORDSettingInRegistry(APPDWORDSETTINGS setting, DWORD dwValue) {
 	case storedSelectionBottom:
 		sValueName.assign(L"storedSelectionBottom");
 		break;
+	case disablePrintScreenKeyForSnipping:
+		sValueName.assign(L"disablePrintScreenKeyForSnipping");
+		break;
 	default:
 		OutputDebugString(L"Invalid setting");
 		return FALSE;
@@ -646,61 +956,52 @@ BOOL storeDWORDSettingInRegistry(APPDWORDSETTINGS setting, DWORD dwValue) {
 		return FALSE;
 	}
 
-	HKEY hKey;
-	LONG lResult;
-
-	// Open registry value
-	lResult = RegCreateKeyEx(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, 0, NULL, 0, KEY_WRITE, NULL, &hKey, NULL);
-	if (lResult == ERROR_SUCCESS) {
-
-		// Write to registry
-		lResult = RegSetValueEx(hKey, sValueName.c_str(), 0, REG_DWORD, (const BYTE*)&dwValue, sizeof(dwValue));
-		if (lResult != ERROR_SUCCESS) {
-			OutputDebugString(L"Error writing to registry");
-			bResult = FALSE;
-		}
-		RegCloseKey(hKey);
-	}
-	return bResult;
+	if (setDWORDValueToRegistry(HKEY_CURRENT_USER,REGISTRYSETTINGSPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS)
+		return TRUE;
+	else
+		return FALSE;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  Function: setRunRegistryValue
+  Function: setRunKeyRegistryValue
 
   Summary:   Set or delete registry run value to run the program at logon
 
-  Args:		BOOL enalbed
+  Args:		BOOL enabled
 			  TRUE = Enable program start at logon
 			  FALSE = Disable program start at logon
-
+			HKEY hkRoot
+			  HKEY_CURRENT_USER or HKEY_LOCAL_MACHINE (HKEY_LOCAL_MACHINE needs local admin rights)
   Returns:
 
 -----------------------------------------------------------------F-F*/
-void setRunRegistryValue(BOOL enabled)
+void setRunKeyRegistryValue(BOOL enabled, HKEY hkRoot)
 {
 	wchar_t szProgramPath[MAX_PATH] = L"";
 	wchar_t szProgramPathQuoted[MAX_PATH] = L"";
 
+	if ((hkRoot != HKEY_CURRENT_USER) && (hkRoot != HKEY_LOCAL_MACHINE)) return; // Unknown root
+
 	if (!enabled)
 	{ // Delete run key value
-		HKEY hKey = NULL;
-		if (RegOpenKeyEx(HKEY_CURRENT_USER, REGISTRYRUNPATH, 0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
-			RegDeleteValue(hKey, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
-		}
+		deleteValueFromRegistry(hkRoot, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
+		#ifdef _WIN64
+		if (hkRoot == HKEY_LOCAL_MACHINE) // Also clear x86 registry on a x64 system
+			deleteValueFromRegistry(hkRoot, REGISTRYRUNPATHX86, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
+		#endif
 	}
 	else
 	{ // Create run key value
 		if (GetModuleFileName(NULL, szProgramPath, MAX_PATH) > 0)
 		{
 			_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c", L'"', szProgramPath, L'"'); // Quote string
-			RegSetKeyValue(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), REG_SZ, szProgramPathQuoted, (DWORD)(wcslen(szProgramPathQuoted) + 1) * sizeof(WCHAR));
-
+			if (hkRoot != NULL) RegSetKeyValue(hkRoot, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), REG_SZ, szProgramPathQuoted, (DWORD)(wcslen(szProgramPathQuoted) + 1) * sizeof(WCHAR));
 		}
 	}
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-  Function: getRunRegistryValue
+  Function: isRunKeyEnabledFromRegistry
 
   Summary:   Gets registry run value to run the program at logon
 
@@ -711,35 +1012,42 @@ void setRunRegistryValue(BOOL enabled)
 			  FALSE = Program start at logon is disabled
 
 -----------------------------------------------------------------F-F*/
-bool getRunRegistryValue()
+BOOL isRunKeyEnabledFromRegistry()
 {
-	wchar_t szValue[MAX_PATH];
+	BOOL bFound = FALSE;
+	wchar_t szValue[MAX_PATH] = L"";
 	szValue[0] = L'\0';
 	DWORD valueSize = 0;
 	DWORD keyType = 0;
 
-	// Get size of registry value
-	if (RegGetValue(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), RRF_RT_REG_SZ, &keyType, NULL, &valueSize) == ERROR_SUCCESS)
-	{
-		if ((valueSize > 0) && (valueSize <= (MAX_PATH + 1) * sizeof(WCHAR))) // Size OK?
-		{
-			// Get registry value
-			valueSize = MAX_PATH * sizeof(WCHAR); // Max size incl. termination
-			if (RegGetValue(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, &szValue, &valueSize) == ERROR_SUCCESS)
-			{
-				wchar_t szProgramPath[MAX_PATH];
-				wchar_t szProgramPathQuoted[MAX_PATH];
-				if (GetModuleFileName(NULL, szProgramPath, MAX_PATH) > 0)
-				{
-					_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c", L'"', szProgramPath, L'"'); // Quote string
-					if (_wcsicmp(szValue, szProgramPathQuoted) != 0) setRunRegistryValue(TRUE); // Fix invalid registry value
-				}
-			}
-			else
-			{
-				szValue[0] = L'\0';
-			}
+	g_bRunKeyReadOnly = FALSE;
+	wchar_t szProgramPath[MAX_PATH];
+	wchar_t szProgramPathQuoted[MAX_PATH];
+	if (GetModuleFileName(NULL, szProgramPath, MAX_PATH) == 0) return FALSE;
+	_snwprintf_s(szProgramPathQuoted, MAX_PATH, _TRUNCATE, L"%c%s%c", L'"', szProgramPath, L'"'); // Quote string
+
+	// Check HKLM run keys
+	if (getSZFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), szValue, MAX_PATH)) {
+		if (_wcsicmp(szValue, szProgramPathQuoted) != 0) { // Ignore invalid registry value
+			szValue[0] = L'\0';
+		} else 	{
+			g_bRunKeyReadOnly = TRUE;
+			bFound = TRUE;
+			setRunKeyRegistryValue(FALSE,HKEY_CURRENT_USER); // Remove user run key because local machine key is set
 		}
+	}
+	if (!bFound && getSZFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYRUNPATHX86, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), szValue, MAX_PATH)) {
+		if (_wcsicmp(szValue, szProgramPathQuoted) != 0) { // Ignore invalid registry value
+			szValue[0] = L'\0';
+		} else 	{
+			g_bRunKeyReadOnly = TRUE;
+			bFound = TRUE;
+			setRunKeyRegistryValue(FALSE,HKEY_CURRENT_USER); // Remove user run key because local machine key is set
+		}
+	}
+
+	if (!bFound && getSZFromRegistry(HKEY_CURRENT_USER, REGISTRYRUNPATH, LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), szValue, MAX_PATH)) {
+		if (_wcsicmp(szValue, szProgramPathQuoted) != 0) setRunKeyRegistryValue(TRUE,HKEY_CURRENT_USER); // Fix invalid registry value
 	}
 
 	if (wcslen(szValue) > 0)
@@ -755,48 +1063,39 @@ bool getRunRegistryValue()
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: getScreenshotPathFromRegistry
 
-  Summary:   Get path of screenshot folder from registry or path to EXE file
+  Summary:   Get path of screenshot folder from GPO, registry or path to EXE file
 
   Args:
 
-  Returns:	std::wstring
-			  Path of screenshot folder
+  Returns:
 
 -----------------------------------------------------------------F-F*/
-std::wstring getScreenshotPathFromRegistry()
+void getScreenshotPathFromRegistry()
 {
-	std::wstring sResult;
+	BOOL bFound = FALSE;
+	wchar_t szRegistryValue[]=L"screenshotPath";
+	g_bScreenshotPathGPO = FALSE;
+	g_screenshotPath[0] = L'\0';
 
-	// Get stored path from registry
-	wchar_t szValue[MAX_PATH];
-	szValue[0] = L'\0';
-	DWORD valueSize = 0;
-	DWORD keyType = 0;
-	// Get size of registry value
-	if (RegGetValue(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, L"screenshotPath", RRF_RT_REG_SZ, &keyType, NULL, &valueSize) == ERROR_SUCCESS)
+	// Get stored path from GPO or registry
+	bFound = getSZFromRegistry(HKEY_CURRENT_USER, REGISTRYGPOPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
+	if (!bFound) bFound = getSZFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYGPOPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
+	if (bFound) g_bScreenshotPathGPO = TRUE;
+	if (!bFound) bFound = getSZFromRegistry(HKEY_CURRENT_USER, REGISTRYSETTINGSPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
+
+	// Failback value (also check folder to be folder and nothing else, because later we use ShellExecute)
+	if (!bFound || !PathIsDirectory(g_screenshotPath))
 	{
-		if ((valueSize > 0) && (valueSize <= (MAX_PATH + 1) * sizeof(WCHAR))) // Size OK?
+		// GPO default settings
+		bFound = getSZFromRegistry(HKEY_CURRENT_USER, REGISTRYGPODEFAULTSPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
+		if (!bFound) bFound = getSZFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYGPODEFAULTSPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
+		if (!bFound || !PathIsDirectory(g_screenshotPath)) // Last failback
 		{
-			// Get registry value
-			valueSize = MAX_PATH * sizeof(WCHAR); // Max size incl. termination
-			if (RegGetValue(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, L"screenshotPath", RRF_RT_REG_SZ | RRF_ZEROONFAILURE, NULL, &szValue, &valueSize) != ERROR_SUCCESS)
-			{
-				szValue[0] = L'\0';
-			}
+			// Use path of EXE file
+			GetModuleFileName(NULL, g_screenshotPath, MAX_PATH);
+			PathRemoveFileSpec(g_screenshotPath);
 		}
 	}
-	if (wcslen(szValue) > 0)
-	{
-		sResult.assign(szValue);
-	}
-	else
-	{ // No registry value found => Use path of EXE file
-		wchar_t szWorkingFolder[MAX_PATH];
-		GetModuleFileName(NULL, szWorkingFolder, MAX_PATH);
-		PathRemoveFileSpec(szWorkingFolder);
-		sResult.assign(szWorkingFolder);
-	}
-	return sResult;
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -834,7 +1133,6 @@ int CALLBACK changeScreenshotPathAndStorePathToRegistryCallbackProc(HWND hwnd, U
 void changeScreenshotPathAndStorePathToRegistry()
 {
 	std::wstring sMessage = LoadStringAsWstr(g_hInst, IDS_SELECTFOLDER);
-	WCHAR szStartPath[MAX_PATH];
 	LPITEMIDLIST pidl;
 
 	BROWSEINFOW bi = { 0 };
@@ -843,12 +1141,11 @@ void changeScreenshotPathAndStorePathToRegistry()
 	bi.ulFlags = BIF_NEWDIALOGSTYLE | BIF_RETURNONLYFSDIRS | BIF_EDITBOX | BIF_VALIDATE;
 
 	// Convert the start path to a PIDL
-	_snwprintf_s(szStartPath, MAX_PATH, _TRUNCATE, L"%s", getScreenshotPathFromRegistry().c_str());
-	HRESULT hr = SHParseDisplayName(szStartPath, NULL, &pidl, 0, NULL);
+	HRESULT hr = SHParseDisplayName(g_screenshotPath, NULL, &pidl, 0, NULL);
 	if (SUCCEEDED(hr))
 	{
 		bi.lpfn = changeScreenshotPathAndStorePathToRegistryCallbackProc;
-		bi.lParam = (LPARAM)szStartPath;
+		bi.lParam = (LPARAM)g_screenshotPath;
 	}
 
 	// Browse for folder dialog
@@ -858,7 +1155,7 @@ void changeScreenshotPathAndStorePathToRegistry()
 		WCHAR szPath[MAX_PATH];
 		if (SHGetPathFromIDList(pidlSelected, szPath))
 		{
-			RegSetKeyValue(HKEY_CURRENT_USER, REGISTRYSETTINGPATH, L"screenshotPath", REG_SZ, szPath, (DWORD)(wcslen(szPath) + 1) * sizeof(WCHAR));
+			RegSetKeyValue(HKEY_CURRENT_USER, REGISTRYSETTINGSPATH, L"screenshotPath", REG_SZ, szPath, (DWORD)(wcslen(szPath) + 1) * sizeof(WCHAR));
 		}
 		CoTaskMemFree(pidlSelected);
 	}
@@ -918,6 +1215,66 @@ int GetEncoderClsid(const WCHAR* format, CLSID* pClsid)
 	}
 	free(pImageCodecInfo);
 	return -1; // Error
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: checkPrintScreenKeyForSnipping
+
+  Summary:   Check for PrintScreenKeyForSnippingEnabled registry key (= Windows capture tool is enabled)
+
+  Args:     HWND hWindow
+			  Handle to main window
+
+  Returns:
+
+-----------------------------------------------------------------F-F*/
+void checkPrintScreenKeyForSnipping(HWND hWindow)
+{
+	std::wstring sTitle(LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
+	std::wstring sMain(LoadStringAsWstr(g_hInst, IDS_PRINTKEYWARNINGMAIN).c_str());
+	std::wstring sContent(LoadStringAsWstr(g_hInst, IDS_PRINTKEYWARNINGCONTEND).c_str());
+	std::wstring sYes(LoadStringAsWstr(g_hInst, IDS_YES).c_str());
+	std::wstring sYesAlways(LoadStringAsWstr(g_hInst, IDS_YESALWAYS).c_str());
+	std::wstring sNo(LoadStringAsWstr(g_hInst, IDS_NO).c_str());
+
+	int nButtonPressed = 0;
+
+	#define IDYESALWAYS 100
+	TASKDIALOG_BUTTON buttons[] = {
+		{IDYES,sYes.c_str()},
+		{IDYESALWAYS,sYesAlways.c_str()},
+		{IDNO,sNo.c_str()}
+	};
+
+	TASKDIALOGCONFIG config = { 0 };
+	config.cbSize = sizeof(config);
+	config.hInstance = g_hInst;
+	config.hwndParent = hWindow;
+	config.pszWindowTitle = sTitle.c_str();
+	config.cButtons = ARRAYSIZE(buttons);
+	config.pButtons = buttons;
+	config.pszMainIcon = TD_WARNING_ICON;
+	config.pszMainInstruction = sMain.c_str();
+	config.pszContent = sContent.c_str();
+	config.nDefaultButton = IDYES;
+
+	DWORD regValue = 0;
+	if (getDWORDValueFromRegistry(HKEY_CURRENT_USER, L"Control Panel\\Keyboard", L"PrintScreenKeyForSnippingEnabled", regValue) == ERROR_SUCCESS) {
+		if (regValue == 1) {
+			getDWORDSettingFromRegistry(disablePrintScreenKeyForSnipping);
+			int rc = IDNO;
+			if (!g_bDisablePrintScreenKeyForSnipping) {
+				TaskDialogIndirect(&config, &nButtonPressed, NULL, NULL);
+				if (nButtonPressed == IDYESALWAYS) {
+					storeDWORDSettingInRegistry(disablePrintScreenKeyForSnipping, 1);
+				}
+			}
+			if (g_bDisablePrintScreenKeyForSnipping || (nButtonPressed == IDYES) || (nButtonPressed == IDYESALWAYS)) {
+				// Set PrintScreenKeyForSnippingEnabled to 0x0 to disable the Windows builtin capture tool
+				setDWORDValueToRegistry(HKEY_CURRENT_USER, L"Control Panel\\Keyboard", L"PrintScreenKeyForSnippingEnabled", 0);
+			}
+		}
+	}
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1099,7 +1456,7 @@ BOOL SaveBitmapAsPNG(HBITMAP hBitmap, const WCHAR* fileName)
 		do
 		{
 			// Get Path
-			sFullPathWorkingFile.assign(getScreenshotPathFromRegistry()).append(L"\\").append(fileName);
+			sFullPathWorkingFile.assign(g_screenshotPath).append(L"\\").append(fileName);
 
 			Status status = bitmap->Save(sFullPathWorkingFile.c_str(), &clsidPng, NULL);
 			if (status != Gdiplus::Ok) // Windows GDI+ not OK
@@ -1140,7 +1497,7 @@ BOOL SaveBitmapAsPNG(HBITMAP hBitmap, const WCHAR* fileName)
 		delete bitmap;
 	}
 	else bRC = FALSE;
-	
+
 	if (bRC) g_sLastScreenshotFile = sFullPathWorkingFile;
 	GdiplusShutdown(gdiplusToken);
 	return bRC;
@@ -1214,12 +1571,12 @@ BOOL saveSelection(HWND hWindow)
 		if (g_saveToFile) // Save selected area to file?
 		{
 			// Create folder
-			CreateDirectory(getScreenshotPathFromRegistry().c_str(), NULL);
+			CreateDirectory(g_screenshotPath, NULL);
 
 			// Create file
 			SYSTEMTIME tLocal;
 			GetLocalTime(&tLocal);
-			wchar_t szFileName[MAX_PATH] = L""; 
+			wchar_t szFileName[MAX_PATH] = L"";
 
 #define FILEPATTERN L"Screenshot %04u-%02u-%02u %02d%02d%02d.png"
 			if (_snwprintf_s(szFileName, MAX_PATH, _TRUNCATE, FILEPATTERN, tLocal.wYear, tLocal.wMonth, tLocal.wDay, tLocal.wHour, tLocal.wMinute, tLocal.wSecond) >= 0) {
@@ -1290,8 +1647,6 @@ CLEANUP:
 
   Args:     HDC hdcOutputBuffer
 			  Handle to drawing context for the output buffer
-			HDC hdcScreenshot
-			  Handle to drawing context for the screenshot
 			BOXTYPE boxType
 			  Type of position (BoxFirstPointA, BoxFinalPointA, BoxFinalPointB)
 
@@ -1300,7 +1655,7 @@ CLEANUP:
 			  TRUE = failure
 
 -----------------------------------------------------------------F-F*/
-BOOL zoomMousePosition(HDC hdcOutputBuffer, HDC hdcScreenshot, BOXTYPE boxType)
+BOOL zoomMousePosition(HDC hdcOutputBuffer, BOXTYPE boxType)
 {
 #define MAXSTRDATAZOOM 30
 	wchar_t strData[MAXSTRDATAZOOM];
@@ -1314,8 +1669,12 @@ BOOL zoomMousePosition(HDC hdcOutputBuffer, HDC hdcScreenshot, BOXTYPE boxType)
 	BOOL bResult = TRUE;
 	std::wstring sMessage = L"";
 
-	if ((boxType != BoxFirstPointA) && (abs(g_selection.right - g_selection.left) < ZOOMWIDTH * g_zoomScale)) goto CLEANUP; // Selection too small
-	if ((boxType != BoxFirstPointA) && (abs(g_selection.bottom - g_selection.top) < ZOOMHEIGHT * g_zoomScale)) goto CLEANUP; // Selection too small
+	// Disable zoom for inactive point when selected area is too small
+	if (!(((g_appState==statePointA) && (boxType == BoxFinalPointA)) ||
+		((g_appState==statePointB) && (boxType == BoxFinalPointB)))) {
+		if ((boxType != BoxFirstPointA) && (abs(g_selection.right - g_selection.left) < (long) (ZOOMWIDTH * g_zoomScale))) goto CLEANUP; // Selection too small
+		if ((boxType != BoxFirstPointA) && (abs(g_selection.bottom - g_selection.top) < (long) (ZOOMHEIGHT * g_zoomScale))) goto CLEANUP; // Selection too small
+	}
 
 	// Font
 	// Specify a font typeface name and weight.
@@ -1395,7 +1754,7 @@ BOOL zoomMousePosition(HDC hdcOutputBuffer, HDC hdcScreenshot, BOXTYPE boxType)
 		SetStretchBltMode(hdcOutputBuffer, COLORONCOLOR);
 
 		if (!StretchBlt(hdcOutputBuffer, zoomBoxX, zoomBoxY, ZOOMWIDTH * g_zoomScale, ZOOMHEIGHT * g_zoomScale,
-			hdcScreenshot, zoomCenterX - ZOOMWIDTH / 2, zoomCenterY - ZOOMHEIGHT / 2, ZOOMWIDTH, ZOOMHEIGHT, SRCCOPY))
+			hdcOutputBuffer, zoomCenterX - ZOOMWIDTH / 2, zoomCenterY - ZOOMHEIGHT / 2, ZOOMWIDTH, ZOOMHEIGHT, SRCCOPY))
 		{
 			sMessage.assign(L"StretchBlt@zoomMousePosition ")
 				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
@@ -1914,7 +2273,7 @@ CLEANUP:
 			  FALSE = failure
 
 -----------------------------------------------------------------F-F*/
-bool markScreenshotRect(RECT rect, int lineWidth, BYTE blendAlpha) {
+BOOL markScreenshotRect(RECT rect, int lineWidth, BYTE blendAlpha) {
 	HDC hdcScreenshot = NULL;
 	HDC hdcInner = NULL;
 	HDC hdcOuter = NULL;
@@ -2159,7 +2518,7 @@ BOOL OnPaint(HWND hWindow) {
 	case stateFirstPoint:
 		inner.left = g_selection.left;
 		inner.top = g_selection.top;
-		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFirstPointA);
+		zoomMousePosition(hdcOutputBuffer, BoxFirstPointA);
 		break;
 	case statePointA:
 	case statePointB:
@@ -2213,11 +2572,12 @@ BOOL OnPaint(HWND hWindow) {
 		SetBkColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
 
 		// Draw text, when enough splace
-		if (abs(g_selection.right - g_selection.left) >= ZOOMWIDTH * g_zoomScale)
+		if (abs(g_selection.right - g_selection.left) >= (long) (ZOOMWIDTH * g_zoomScale))
 			DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CENTER | DT_BOTTOM);
 
-		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFinalPointA);
-		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFinalPointB);
+		// Draw mouse position
+		zoomMousePosition(hdcOutputBuffer, BoxFinalPointA);
+		zoomMousePosition(hdcOutputBuffer, BoxFinalPointB);
 
 		// Draw text for selection height
 		rectText = { 0, 0, 0, 0 };
@@ -2260,7 +2620,7 @@ BOOL OnPaint(HWND hWindow) {
 		SetBkColor(hdcOutputBuffer, g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
 
 		// Draw text, when enough space
-		if (abs(g_selection.bottom - g_selection.top) >= ZOOMHEIGHT * g_zoomScale)
+		if (abs(g_selection.bottom - g_selection.top) >= (LONG) (ZOOMHEIGHT * g_zoomScale))
 			DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP);
 
 		break;
@@ -2271,7 +2631,7 @@ BOOL OnPaint(HWND hWindow) {
 	}
 
 	// Draw information
-	if (g_displayInternallnformation)
+	if (g_displayInternalInformation)
 	{
 		HBRUSH hBrushDisplayForeground = (g_useAlternativeColors ? hBrushBackground : hBrushForeground);
 		HBRUSH hBrushDisplayBackground = (g_useAlternativeColors ? hBrushForeground : hBrushBackground);
@@ -2335,10 +2695,14 @@ BOOL OnPaint(HWND hWindow) {
 		RECT rectWindow = { 0 };
 		GetWindowRect(hWindow, &rectWindow);
 
-		if ((rectWindow.left != screenX) || (rectWindow.top != screenY)) { 
+		if ((rectWindow.left != screenX) || (rectWindow.top != screenY)) {
 			_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L" ([%d,%d]!=[%d,%d])", rectWindow.left, rectWindow.top, screenX, screenY);
 			sDisplayInfos.append(strData);
 		}
+
+		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L" ([%d,%d][%d,%d])", rectWindow.left, rectWindow.top, rectWindow.right, rectWindow.bottom);
+		sDisplayInfos.append(strData);
+
 		_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L" Has focus %s Selected Monitor %d", (hWindow == GetForegroundWindow()) ? L"Yes" : L"No", g_selectedMonitor);
 		sDisplayInfos.append(strData);
 
@@ -2347,16 +2711,16 @@ BOOL OnPaint(HWND hWindow) {
 			_snwprintf_s(strData, MAXSTRDATA, _TRUNCATE, L"Monitor %d [%d,%d] [%d,%d]", i, g_rectMonitor[i].left, g_rectMonitor[i].top, g_rectMonitor[i].right, g_rectMonitor[i].bottom);
 			sDisplayInfos.append(L"\n").append(strData);
 		}
-		
+
 		sDisplayInfos.append(L"\n\nA = Select all\nM = Select next monitor\nTab = A <-> B\nCursor keys = Move A/B\n")
 			.append(L"Alt+cursor keys = Fast move A/B\nShift+cursor keys = Find color change for A/B\nReturn = OK\nESC = Cancel")
 			.append(L"\n+/- = Increase/decrease selection")
 			.append(L"\nPageUp/PageDown, mouse wheel = Zoom In/Out")
-			.append(L"\nInsert = Store selection\nHome = Use stored selection\nDelete = Delete stored and used selection\nP = Pixelate selection\nB = Box around selection")
-			.append(L"\nC = Clipboard On/Off\nF = File On/Off\nS = Alternative colors On/Off")
-			.append(L"\nF1 = Display information On/Off");
-
-		if (g_FIX01) sDisplayInfos.append(L"\nD = FIX01: Window position");
+			.append(L"\nInsert = Store selection\nHome = Use stored selection\nDelete = Delete stored and used selection\nP = Pixelate selection\nB = Box around selection");
+		if (!g_bSaveToClipboardGPO) sDisplayInfos.append(L"\nC = Clipboard On/Off");
+		if (!g_bSaveToFileGPO) sDisplayInfos.append(L"\nF = File On/Off");
+		sDisplayInfos.append(L"\nS = Alternative colors On/Off");
+		if (!g_bDisplayInternalInformationGPO) sDisplayInfos.append(L"\nF1 = Display information On/Off");
 
 		// Calc text area
 		DrawText(hdcOutputBuffer, sDisplayInfos.c_str(), -1, &rectTextArea, DT_NOCLIP | DT_CALCRECT);
@@ -2937,7 +3301,7 @@ void startCaptureGUI(HWND hWindow) {
 	BYTE     bAlpha;
 	DWORD    dwFlags;
 
-	KillTimer(hWindow, IDT_TIMER5000MS);
+	KillTimer(hWindow, IDT_TIMERSCREENSHOTDELAYED);
 
 	g_activeWindow = GetForegroundWindow();
 	GetLayeredWindowAttributes(hWindow, &crKey, &bAlpha, &dwFlags);
@@ -2957,15 +3321,17 @@ void startCaptureGUI(HWND hWindow) {
 	SetWindowLong(hWindow, GWL_EXSTYLE, prevStyle);
 
 	// Refresh settings from registry
-	g_zoomScale = getDWORDSettingFromRegistry(defaultZoomScale);
-	g_saveToFile = getDWORDSettingFromRegistry(saveToFile);
-	g_saveToClipboard = getDWORDSettingFromRegistry(saveToClipboard);
-	g_useAlternativeColors = getDWORDSettingFromRegistry(useAlternativeColors);
-	g_displayInternallnformation = getDWORDSettingFromRegistry(displayInternallnformation);
-	g_storedSelection.left = getDWORDSettingFromRegistry(storedSelectionLeft);
-	g_storedSelection.top = getDWORDSettingFromRegistry(storedSelectionTop);
-	g_storedSelection.right = getDWORDSettingFromRegistry(storedSelectionRight);
-	g_storedSelection.bottom = getDWORDSettingFromRegistry(storedSelectionBottom);
+	getDWORDSettingFromRegistry(defaultZoomScale);
+	getDWORDSettingFromRegistry(screenshotDelay);
+	getDWORDSettingFromRegistry(saveToFile);
+	getDWORDSettingFromRegistry(saveToClipboard);
+	getDWORDSettingFromRegistry(useAlternativeColors);
+	getDWORDSettingFromRegistry(displayInternalInformation);
+	getDWORDSettingFromRegistry(storedSelectionLeft);
+	getDWORDSettingFromRegistry(storedSelectionTop);
+	getDWORDSettingFromRegistry(storedSelectionRight);
+	getDWORDSettingFromRegistry(storedSelectionBottom);
+	getScreenshotPathFromRegistry();
 
 	enterFullScreen(hWindow);
 	ShowWindow(hWindow, SW_NORMAL);
@@ -2993,7 +3359,7 @@ void startCaptureGUI(HWND hWindow) {
 	// Enable 1s time to show selected point
 	SetTimer(hWindow, IDT_TIMER1000MS, 1000, (TIMERPROC)NULL);
 
-	// Check window position, which is sometimes wrong (perhaps a timing problem or caused by Omnissa Horizon Client)
+	// Final FIX01: Check window position, which is sometimes wrong (perhaps a timing problem or caused by Omnissa Horizon Client)
 	RECT rectWindow = { 0 };
 	GetWindowRect(hWindow, &rectWindow);
 	int screenX = GetSystemMetrics(SM_XVIRTUALSCREEN);
@@ -3003,7 +3369,7 @@ void startCaptureGUI(HWND hWindow) {
 		Sleep(500);
 		enterFullScreen(hWindow);
 	}
-	
+
 	// Force foreground window (Prevents keyboard input focus problems on a second or third monitor)
 	SetForegroundWindowInternal(hWindow);
 	Sleep(10);
@@ -3052,44 +3418,72 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
   Args:
 
   Returns:  BOOL
-			  TRUE = success
-			  FALSE = failure
+			  TRUE = Keep program running
+			  FALSE = Exit wWinMain afterwards
 
 -----------------------------------------------------------------F-F*/
 BOOL checkArguments()
 {
 	int argc;
 	LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
+	BOOL bExit = FALSE;
 
-	if (argv == NULL) return FALSE;
+	if (argv == NULL) {
+		OutputDebugString(L"Argv fails");
+		return FALSE;
+	}
 
-	g_saveToClipboard = FALSE;
-	g_saveToFile = FALSE;
+	bool bAutoSaveToClipboard = FALSE;
+	bool bAutoSaveToFile = FALSE;
+	getScreenshotPathFromRegistry();
 
 	for (int i = 0; i < argc; i++)
 	{
-		if (_wcsicmp(argv[i], L"/ac") == 0) g_saveToClipboard = TRUE;
-		if (_wcsicmp(argv[i], L"/af") == 0) g_saveToFile = TRUE;
-		if (_wcsicmp(argv[i], L"/f") == 0) ShellExecute(NULL, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL); // Open screenshot folder
-		if (_wcsicmp(argv[i], L"/s") == 0) g_onetimeCapture = TRUE; // Enable onetimeCapture mode
+		if (_wcsicmp(argv[i], L"/re") == 0) {
+			setRunKeyRegistryValue(TRUE, HKEY_LOCAL_MACHINE);
+			bExit = TRUE;
+			break;
+		}
+		if (_wcsicmp(argv[i], L"/rd") == 0) {
+			setRunKeyRegistryValue(FALSE, HKEY_LOCAL_MACHINE);
+			bExit = TRUE;
+			break;
+		}
+		if (_wcsicmp(argv[i], L"/ac") == 0) bAutoSaveToClipboard = TRUE;
+		if (_wcsicmp(argv[i], L"/af") == 0) bAutoSaveToFile = TRUE;
+		if (_wcsicmp(argv[i], L"/f") == 0) {
+			ShellExecute(NULL, L"open", g_screenshotPath, NULL, NULL, SW_SHOWNORMAL); // Open screenshot folder
+			bExit = TRUE;
+			break;
+		}
+		if (_wcsicmp(argv[i], L"/s") == 0) g_onetimeCapture = TRUE; // Enable onetimeCapture mode (Program will exit afterwards automatically)
 		if (_wcsicmp(argv[i], L"/v") == 0)
 		{
 			showProgramInformation(NULL);
-			Sleep(200); // Delay next step to prevent animation artifacts on screenshots
+			bExit = TRUE;
+			break;
 		}
 		if (_wcsicmp(argv[i], L"/?") == 0)
 		{
 			showProgramArguments(NULL);
-			Sleep(200);	// Delay next step to prevent animation artifacts on screenshots
+			bExit = TRUE;
+			break;
 		}
 	}
 
 	LocalFree(argv);
 
-	if (g_saveToClipboard || g_saveToFile)
+	if (bExit) return FALSE; // Exit wWinMain afterwards
+
+	if (bAutoSaveToClipboard || bAutoSaveToFile)
 	{
+		// Enable only target passed by arguments
+		g_saveToFile = FALSE;
+		g_saveToClipboard = FALSE;
+		if (bAutoSaveToClipboard) g_saveToClipboard = TRUE;
+		if (bAutoSaveToFile) g_saveToFile = TRUE;
 		CaptureScreen(NULL);
-		if (g_hBitmap == NULL) return FALSE;
+		if (g_hBitmap == NULL) return FALSE; // Error => Exit wWinMain afterwards
 		BITMAP bm;
 		if (GetObject(g_hBitmap, sizeof(bm), &bm) != 0)
 		{
@@ -3099,9 +3493,9 @@ BOOL checkArguments()
 			g_selection.bottom = limitYtoBitmap(bm.bmHeight - 1);
 			saveSelection(NULL);
 		}
+		return FALSE; // Finished => Exit wWinMain afterwards
 	}
-
-	return TRUE;
+	return TRUE; // Keep wWinMain running
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -3132,7 +3526,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	wchar_t szHex[_MAX_ITOSTR_BASE16_COUNT + 2];
 	MSG msg;
 
-	checkArguments();
+	g_hInst = hInstance; // Store instance handle in global variable
+
+	// Check for temporary fixes
+	getDWORDSettingFromRegistry(DEV);
+
+	// Arguments
+	if (!checkArguments()) return 0;
 
 	// Semaphore to prevent concurrent actions
 	g_hSemaphoreModalBlocked = CreateSemaphore(NULL, 1, 1, NULL);
@@ -3154,10 +3554,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	// Get notification when windows explorer crashes and re-launches the taskbar
 	WM_TASKBARCREATED = RegisterWindowMessageW(L"TaskbarCreated");
 
+	// Register class
 	MyRegisterClass(hInstance);
 
-	g_hInst = hInstance; // Store instance handle in global variable
-
+	// Create main window
 	g_hWindow = CreateWindow(L"MainWndClass", LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
@@ -3177,11 +3577,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 	}
 
 	// Get settings from registry
-	g_saveToFile = getDWORDSettingFromRegistry(saveToFile);
-	g_saveToClipboard = getDWORDSettingFromRegistry(saveToClipboard);
-	g_FIX01 = getDWORDSettingFromRegistry(FIX01);
+	getDWORDSettingFromRegistry(saveToClipboard);
+	getDWORDSettingFromRegistry(saveToFile);
 	checkScreenshotTargets(g_hWindow);
-	getRunRegistryValue();
+	isRunKeyEnabledFromRegistry();
 
 	if (g_onetimeCapture) SendMessage(g_hWindow, WM_STARTED, 0, 0); // onetimeCapture mode
 	else
@@ -3193,9 +3592,11 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		g_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
 		g_nid.uCallbackMessage = WM_TRAYICON;
 		g_nid.hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
-#define MAXTOOLTIPSIZE 64 // Including null termination
+#define MAXTOOLTIPSIZE 64 // Including null termination (https://learn.microsoft.com/de-de/windows/win32/api/shellapi/ns-shellapi-notifyicondataw)
 		_snwprintf_s(g_nid.szTip, MAXTOOLTIPSIZE, _TRUNCATE, L"%s", LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str());
 		Shell_NotifyIcon(NIM_ADD, &g_nid);
+
+		checkPrintScreenKeyForSnipping(g_hWindow);
 
 		SetHook();
 	}
@@ -3256,7 +3657,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	}
 	case WM_ZOOMIN:
 		g_zoomScale++;
-		if (g_zoomScale > MAXZOOMFACTOR) g_zoomScale = MAXZOOMFACTOR;
+		if (g_zoomScale > MAXZOOMSCALE) g_zoomScale = MAXZOOMSCALE;
 		InvalidateRect(hWnd, NULL, TRUE);
 		break;
 	case WM_ZOOMOUT:
@@ -3282,7 +3683,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	}
 	case WM_STARTED: // Start new capture
 	{
-		// Skip caputure, when a modal dialog is running
+		// Skip capture, when a modal dialog is running
 		if (WaitForSingleObject(g_hSemaphoreModalBlocked, 0) != WAIT_OBJECT_0) break;
 		ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 
@@ -3293,7 +3694,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
 		if (g_onetimeCapture) DestroyWindow(hWnd); // Exit program in onetimeCapture mode
 		KillTimer(hWnd, IDT_TIMER1000MS);
-		KillTimer(hWnd, IDT_TIMER5000MS);
+		KillTimer(hWnd, IDT_TIMERSCREENSHOTDELAYED);
 		ShowCursor(true);
 		ShowWindow(hWnd, SW_HIDE);
 		g_appState = stateTrayIcon;
@@ -3318,7 +3719,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			InvalidateRect(hWnd, NULL, TRUE);
 			SetTimer(hWnd, IDT_TIMER1000MS, 1000, (TIMERPROC)NULL);
 			// Reset zoom
-			g_zoomScale = getDWORDSettingFromRegistry(defaultZoomScale);
+			getDWORDSettingFromRegistry(defaultZoomScale);
 		}
 		else
 		{ // Save selection
@@ -3345,20 +3746,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			}
 			ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
 
+			// Update some vars from registry
+			getDWORDSettingFromRegistry(saveToFile);
+			getDWORDSettingFromRegistry(saveToClipboard);
+			getDWORDSettingFromRegistry(screenshotDelay);
+			getScreenshotPathFromRegistry();
+			BOOL bAutorun = isRunKeyEnabledFromRegistry();
+
 			POINT pt;
 			GetCursorPos(&pt);
 			HMENU hMenu = CreatePopupMenu();
-			AppendMenu(hMenu, MF_STRING, IDM_CAPTURE, LoadStringAsWstr(g_hInst, IDS_SCREENSHOT).c_str());
+			wchar_t szMenuEntry[MAX_PATH] = L"";
+			_snwprintf_s(szMenuEntry, MAX_PATH, _TRUNCATE, LoadStringAsWstr(g_hInst, IDS_SCREENSHOTDELAYED).c_str(), g_screenshotDelay);
+			AppendMenu(hMenu, MF_STRING, IDM_CAPTURE, szMenuEntry);
 			if (!g_sLastScreenshotFile.empty() && PathFileExists(g_sLastScreenshotFile.c_str()) ) {
 				AppendMenu(hMenu, MF_STRING, IDM_OPENLAST, LoadStringAsWstr(g_hInst, IDS_OPENLAST).c_str());
+				if (IsWindows11_24H2OrNewer()) AppendMenu(hMenu, MF_STRING, IDM_EDITLAST, LoadStringAsWstr(g_hInst, IDS_EDITLAST).c_str());
 			} else g_sLastScreenshotFile = L"";
 			AppendMenu(hMenu, MF_STRING, IDM_OPENFOLDER, LoadStringAsWstr(g_hInst, IDS_OPENFOLDER).c_str());
-			AppendMenu(hMenu, MF_STRING, IDM_SETFOLDER, LoadStringAsWstr(g_hInst, IDS_SETFOLDER).c_str());
-			AppendMenu(hMenu, MF_STRING | (g_saveToClipboard ? MF_CHECKED : 0), IDM_SAVETOCLIPBOARD, LoadStringAsWstr(g_hInst, IDS_SAVETOCLIPBOARD).c_str());
-			AppendMenu(hMenu, MF_STRING | (g_saveToFile ? MF_CHECKED : 0), IDM_SAVETOFILE, LoadStringAsWstr(g_hInst, IDS_SAVETOFILE).c_str());
+			AppendMenu(hMenu, MF_STRING | (g_bScreenshotPathGPO ? MF_GRAYED : 0) , IDM_SETFOLDER, LoadStringAsWstr(g_hInst, IDS_SETFOLDER).c_str());
+			AppendMenu(hMenu, MF_STRING | (g_saveToClipboard ? MF_CHECKED : 0) | (g_bSaveToClipboardGPO ? MF_GRAYED : 0), IDM_SAVETOCLIPBOARD, LoadStringAsWstr(g_hInst, IDS_SAVETOCLIPBOARD).c_str());
+			AppendMenu(hMenu, MF_STRING | (g_saveToFile ? MF_CHECKED : 0) | (g_bSaveToFileGPO ? MF_GRAYED : 0), IDM_SAVETOFILE, LoadStringAsWstr(g_hInst, IDS_SAVETOFILE).c_str());
 			AppendMenu(hMenu, MF_SEPARATOR | MF_BYPOSITION, 0, NULL);
 			AppendMenu(hMenu, MF_STRING, IDM_ABOUT, LoadStringAsWstr(g_hInst, IDS_ABOUT).c_str());
-			AppendMenu(hMenu, MF_STRING | (getRunRegistryValue() ? MF_CHECKED : 0), IDM_AUTORUN, LoadStringAsWstr(g_hInst, IDS_AUTORUN).c_str());
+			AppendMenu(hMenu, MF_STRING | (bAutorun ? MF_CHECKED : 0) | (g_bRunKeyReadOnly ? MF_GRAYED : 0), IDM_AUTORUN, LoadStringAsWstr(g_hInst, IDS_AUTORUN).c_str());
 			AppendMenu(hMenu, MF_STRING, IDM_EXIT, LoadStringAsWstr(g_hInst, IDS_EXIT).c_str());
 			SetForegroundWindow(hWnd);
 			TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, pt.x, pt.y, 0, hWnd, NULL);
@@ -3366,6 +3777,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			break;
 		}
 		case WM_LBUTTONDBLCLK: // Double click on tray icon => Open screenshot folder
+			getScreenshotPathFromRegistry();
 			SendMessage(hWnd, WM_COMMAND, IDM_OPENFOLDER, 0);
 			break;
 		}
@@ -3383,7 +3795,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		checkCursorButtons(hWnd, wParam, 1); // Move points with cursor buttons with a one pixel step, if a cursor button is pressed
 		switch (wParam)
 		{
-		case VK_NEXT: // Page down => Zooom out
+		case VK_NEXT: // Page down => Zoom out
 			SendMessage(hWnd, WM_ZOOMOUT, 0, 0);
 			break;
 		case VK_PRIOR: // Page up => Zoom in
@@ -3391,9 +3803,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			break;
 		case 'A': // A => Select all
 			SendMessage(hWnd, WM_SELECTALL, 0, 0);
-			break;
-		case 'D': // FIX01: Window position
-			if (g_FIX01) enterFullScreen(hWnd);
 			break;
 		case 'M': // M => Select next monitor
 			if (g_rectMonitor.size() > 0)
@@ -3417,7 +3826,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case 'F': // F => Toggle save to file
 			SendMessage(hWnd, WM_COMMAND, IDM_SAVETOFILE, 0);
 			break;
-		case 'S': // S => Toogle colors
+		case 'S': // S => Toggle colors
 			SendMessage(hWnd, WM_COMMAND, IDM_ALTERNATIVECOLORS, 0);
 			break;
 		case 'P': // P => Pixelate
@@ -3556,83 +3965,120 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		switch (wParam)
 		{
 		case IDT_TIMER1000MS: // 1s timer
-			InvalidateRect(hWnd, NULL, TRUE);
-			if (g_FIX01) enterFullScreen(hWnd);
-			break;
-		case IDT_TIMER5000MS: // Onetime 5s timer
-			KillTimer(hWnd, IDT_TIMER5000MS); // Only one time
+			{
+				// Check window size
+				RECT rectWindow = { 0 };
+				GetWindowRect(hWnd, &rectWindow);
+				// Reapply fullscreen, if window position/size is not correct
+				if ((rectWindow.left != GetSystemMetrics(SM_XVIRTUALSCREEN)) ||
+					(rectWindow.top != GetSystemMetrics(SM_YVIRTUALSCREEN)) ||
+					(abs(rectWindow.left - rectWindow.left) != GetSystemMetrics(SM_CXVIRTUALSCREEN)) || 
+					(abs(rectWindow.bottom - rectWindow.top) != GetSystemMetrics(SM_CYVIRTUALSCREEN))) 
+				{
+					enterFullScreen(hWnd);
+				}
+
+				InvalidateRect(hWnd, NULL, TRUE);
+				break;
+			}
+		case IDT_TIMERSCREENSHOTDELAYED: // Onetime 5s timer
+			KillTimer(hWnd, IDT_TIMERSCREENSHOTDELAYED); // Only one time
 			SendMessage(hWnd, WM_STARTED, 0, 0);
 			break;
 		}
-		break;
 	case WM_COMMAND: // Menu selection
 		switch (LOWORD(wParam))
 		{
-		case IDM_CAPTURE:
-			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
-			{
-				SetTimer(hWnd, IDT_TIMER5000MS, 5000, (TIMERPROC)NULL);
-				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
-			}
-			break;
-		case IDM_EXIT:
-			PostQuitMessage(0);
-			break;
-		case IDM_ABOUT:
-			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
-			{
-				showProgramInformation(hWnd);
-				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
-			}
-			break;
-		case IDM_OPENFOLDER:
-			ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
-			break;
-		case IDM_OPENLAST:
-		{
-			if (!g_sLastScreenshotFile.empty() && PathFileExists(g_sLastScreenshotFile.c_str()) ) { // Open file if file exists
-				ShellExecute(hWnd, L"open", g_sLastScreenshotFile.c_str(), NULL, NULL, SW_SHOWNORMAL);
+			case IDM_CAPTURE:
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+				{
+					SetTimer(hWnd, IDT_TIMERSCREENSHOTDELAYED, g_screenshotDelay*1000, (TIMERPROC)NULL);
+					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+				}
 				break;
-			} else g_sLastScreenshotFile = L"";
-			// Otherwise open folder
-			ShellExecute(hWnd, L"open", getScreenshotPathFromRegistry().c_str(), NULL, NULL, SW_SHOWNORMAL);
-			break;
-		}
-		case IDM_SETFOLDER:
-			if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+			case IDM_EXIT:
+				PostQuitMessage(0);
+				break;
+			case IDM_ABOUT:
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+				{
+					showProgramInformation(hWnd);
+					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+				}
+				break;
+			case IDM_OPENFOLDER:
+				ShellExecute(hWnd, L"open", g_screenshotPath, NULL, NULL, SW_SHOWNORMAL);
+				break;
+			case IDM_OPENLAST:
 			{
-				changeScreenshotPathAndStorePathToRegistry();
-				ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+				if (!g_sLastScreenshotFile.empty() && PathFileExists(g_sLastScreenshotFile.c_str()) ) { // Open file if file exists
+					ShellExecute(hWnd, L"open", g_sLastScreenshotFile.c_str(), NULL, NULL, SW_SHOWNORMAL);
+					break;
+				} else g_sLastScreenshotFile = L"";
+				// Otherwise open folder
+				ShellExecute(hWnd, L"open", g_screenshotPath, NULL, NULL, SW_SHOWNORMAL);
+				break;
 			}
-			break;
-		case IDM_SAVETOCLIPBOARD: // Toggle save to clipboard
-			g_saveToClipboard = !g_saveToClipboard;
-			storeDWORDSettingInRegistry(saveToClipboard, g_saveToClipboard);
-			checkScreenshotTargets(hWnd);
-			InvalidateRect(hWnd, NULL, TRUE);
-			break;
-		case IDM_SAVETOFILE: // Toggle save to file
-			g_saveToFile = !g_saveToFile;
-			storeDWORDSettingInRegistry(saveToFile, g_saveToFile);
-			checkScreenshotTargets(hWnd);
-			InvalidateRect(hWnd, NULL, TRUE);
-			break;
-		case IDM_ALTERNATIVECOLORS: // Toggle colors
-			g_useAlternativeColors = !g_useAlternativeColors;
-			storeDWORDSettingInRegistry(useAlternativeColors, g_useAlternativeColors);
-			InvalidateRect(hWnd, NULL, TRUE);
-			break;
-		case IDM_DISPLAYINFORMATION: // Toggle display information
-			g_displayInternallnformation = !g_displayInternallnformation;
-			storeDWORDSettingInRegistry(displayInternallnformation, g_displayInternallnformation);
-			InvalidateRect(hWnd, NULL, TRUE);
-			break;
-		case IDM_CANCELCAPTURE: // Cancel screenshot
-			SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
-			break;
-		case IDM_AUTORUN: // Toggle run key value
-			setRunRegistryValue(!getRunRegistryValue());
-			break;
+			case IDM_EDITLAST:
+			{
+				// It will be deprecated on 05 / 01 / 2025
+				// https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-screen-snipping
+				if (!g_sLastScreenshotFile.empty() && PathFileExists(g_sLastScreenshotFile.c_str())) { // Edit file if file exists
+					WCHAR outputUrl[MAX_PATH];
+					DWORD dwSize = ARRAYSIZE(outputUrl);
+
+					UrlEscape(g_sLastScreenshotFile.c_str(), nullptr, &dwSize, URL_ESCAPE_PERCENT | URL_ESCAPE_ASCII_URI_COMPONENT);
+					UrlEscape(g_sLastScreenshotFile.c_str(), outputUrl, &dwSize, URL_ESCAPE_PERCENT | URL_ESCAPE_ASCII_URI_COMPONENT);
+
+					std::wstring sURI = L"ms-screensketch:edit?&filePath=";
+					sURI.append(outputUrl);
+					ShellExecute(hWnd, L"open", sURI.c_str(), NULL, NULL, SW_SHOWNORMAL);
+
+					break;
+				}
+				break;
+			}
+			case IDM_SETFOLDER:
+				if (WaitForSingleObject(g_hSemaphoreModalBlocked, INFINITE) != WAIT_FAILED)
+				{
+					changeScreenshotPathAndStorePathToRegistry();
+					ReleaseSemaphore(g_hSemaphoreModalBlocked, 1, NULL);
+				}
+				break;
+			case IDM_SAVETOCLIPBOARD: // Toggle save to clipboard
+				if (g_bSaveToClipboardGPO) break;
+				g_saveToClipboard = !g_saveToClipboard;
+				storeDWORDSettingInRegistry(saveToClipboard, g_saveToClipboard);
+				checkScreenshotTargets(hWnd);
+				InvalidateRect(hWnd, NULL, TRUE);
+				break;
+			case IDM_SAVETOFILE: // Toggle save to file
+				if (g_bSaveToFileGPO) break;
+				g_saveToFile = !g_saveToFile;
+				storeDWORDSettingInRegistry(saveToFile, g_saveToFile);
+				checkScreenshotTargets(hWnd);
+				InvalidateRect(hWnd, NULL, TRUE);
+				break;
+			case IDM_ALTERNATIVECOLORS: // Toggle colors
+				g_useAlternativeColors = !g_useAlternativeColors;
+				storeDWORDSettingInRegistry(useAlternativeColors, g_useAlternativeColors);
+				InvalidateRect(hWnd, NULL, TRUE);
+				break;
+			case IDM_DISPLAYINFORMATION: // Toggle display information
+				if (g_bDisplayInternalInformationGPO) break;
+				g_displayInternalInformation = !g_displayInternalInformation;
+				storeDWORDSettingInRegistry(displayInternalInformation, g_displayInternalInformation);
+				InvalidateRect(hWnd, NULL, TRUE);
+				break;
+			case IDM_CANCELCAPTURE: // Cancel screenshot
+				SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
+				break;
+			case IDM_AUTORUN: // Toggle run key value
+			{
+				BOOL bRunEnabled = isRunKeyEnabledFromRegistry();
+				if (!g_bRunKeyReadOnly) setRunKeyRegistryValue(!bRunEnabled,HKEY_CURRENT_USER);
+				break;
+			}
 		}
 		break;
 	case WM_DISPLAYCHANGE:
@@ -3640,7 +4086,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		if (g_appState != stateTrayIcon) SendMessage(hWnd, WM_GOTOTRAY, 0, 0);
 		break;
 	default:
-		if ((WM_TASKBARCREATED != NULL) && (message == WM_TASKBARCREATED)) // Recreate tray icon if explorer was restarted
+		if ((WM_TASKBARCREATED != 0) && (message == WM_TASKBARCREATED)) // Recreate tray icon if explorer was restarted
 		{
 			Shell_NotifyIcon(NIM_ADD, &g_nid);
 			break;
