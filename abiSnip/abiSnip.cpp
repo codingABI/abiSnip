@@ -77,6 +77,7 @@
 			Add Snipping Tool 11 on Windows 11 24H2 computers for "Edit last screenshot..."
 			Add option to disable PrintScreenKeyForSnippingEnabled
             Version update to 1.0.0.5
+  20250701, Do not darken zoomed area while selecting first point
 
 ===================================================================+*/
 
@@ -1647,6 +1648,8 @@ CLEANUP:
 
   Args:     HDC hdcOutputBuffer
 			  Handle to drawing context for the output buffer
+			HDC hdcScreenShot
+			  Handle to drawing context for the screenshot
 			BOXTYPE boxType
 			  Type of position (BoxFirstPointA, BoxFinalPointA, BoxFinalPointB)
 
@@ -1655,7 +1658,7 @@ CLEANUP:
 			  TRUE = failure
 
 -----------------------------------------------------------------F-F*/
-BOOL zoomMousePosition(HDC hdcOutputBuffer, BOXTYPE boxType)
+BOOL zoomMousePosition(HDC hdcOutputBuffer, HDC hdcScreenShot, BOXTYPE boxType)
 {
 #define MAXSTRDATAZOOM 30
 	wchar_t strData[MAXSTRDATAZOOM];
@@ -1753,8 +1756,10 @@ BOOL zoomMousePosition(HDC hdcOutputBuffer, BOXTYPE boxType)
 		if (GetObject(g_hBitmap, sizeof(BITMAP), (PSTR)&bm) == 0) goto FAIL;
 		SetStretchBltMode(hdcOutputBuffer, COLORONCOLOR);
 
+		HDC hdcSource = hdcOutputBuffer;
+		if (g_appState == stateFirstPoint) hdcSource = hdcScreenShot; // Always use screenshot background for first point
 		if (!StretchBlt(hdcOutputBuffer, zoomBoxX, zoomBoxY, ZOOMWIDTH * g_zoomScale, ZOOMHEIGHT * g_zoomScale,
-			hdcOutputBuffer, zoomCenterX - ZOOMWIDTH / 2, zoomCenterY - ZOOMHEIGHT / 2, ZOOMWIDTH, ZOOMHEIGHT, SRCCOPY))
+			hdcSource, zoomCenterX - ZOOMWIDTH / 2, zoomCenterY - ZOOMHEIGHT / 2, ZOOMWIDTH, ZOOMHEIGHT, SRCCOPY))
 		{
 			sMessage.assign(L"StretchBlt@zoomMousePosition ")
 				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
@@ -2493,18 +2498,32 @@ BOOL OnPaint(HWND hWindow) {
 	hbmScreenshotOld = SelectObject(hdcScreenshot, g_hBitmap);
 	if (hbmScreenshotOld == NULL) goto FAIL;
 
-	// Use a blen function to get a darker image of the screenshot
-	BLENDFUNCTION blendFunc;
-	blendFunc.BlendOp = AC_SRC_OVER;
-	blendFunc.BlendFlags = 0;
-	blendFunc.SourceConstantAlpha = g_useAlternativeColors ? 255 : 50; // Factor to darken the screenshot
-	blendFunc.AlphaFormat = 0;
-
-	if (!AlphaBlend(hdcOutputBuffer, 0, 0, bm.bmWidth, bm.bmHeight, hdcScreenshot, 0, 0, bm.bmWidth, bm.bmHeight, blendFunc))
+	if (!g_useAlternativeColors) 
 	{
-		sMessage.assign(L"AlphaBlend@OnPaint ")
-			.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
-		goto FAIL;
+		// Use a blen function to get a darker image of the screenshot
+		BLENDFUNCTION blendFunc;
+		blendFunc.BlendOp = AC_SRC_OVER;
+		blendFunc.BlendFlags = 0;
+		blendFunc.SourceConstantAlpha = 50; // Factor to darken the screenshot
+		blendFunc.AlphaFormat = 0;
+	
+		if (!AlphaBlend(hdcOutputBuffer, 0, 0, bm.bmWidth, bm.bmHeight, hdcScreenshot, 0, 0, bm.bmWidth, bm.bmHeight, blendFunc))
+		{
+			sMessage.assign(L"AlphaBlend@OnPaint ")
+				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED));
+			goto FAIL;
+		}
+	} else {
+		// When no blending is needed
+		if (!BitBlt(hdcOutputBuffer, 0, 0, bm.bmWidth, bm.bmHeight, hdcScreenshot, 0, 0, SRCCOPY))
+		{
+			_snwprintf_s(szHex, _MAX_ITOSTR_BASE16_COUNT + 2, _TRUNCATE, L"0x%08X", GetLastError());
+			sMessage.assign(L"BitBlt@OnPaint ")
+				.append(LoadStringAsWstr(g_hInst, IDS_HASFAILED))
+				.append(L" ")
+				.append(szHex);
+			goto FAIL;
+		}
 	}
 
 	hBrushForeground = CreateSolidBrush(g_useAlternativeColors ? ALTAPPCOLOR : APPCOLOR);
@@ -2518,7 +2537,7 @@ BOOL OnPaint(HWND hWindow) {
 	case stateFirstPoint:
 		inner.left = g_selection.left;
 		inner.top = g_selection.top;
-		zoomMousePosition(hdcOutputBuffer, BoxFirstPointA);
+		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFirstPointA);
 		break;
 	case statePointA:
 	case statePointB:
@@ -2534,7 +2553,7 @@ BOOL OnPaint(HWND hWindow) {
 		outer.top = inner.top - 1;
 		outer.bottom = inner.bottom + 1 + 1; // +1 because GDI the second edge of a rect is not part of the drawn rectangle
 
-		// Show selected area on the darkened background of the screenshot
+		// Show selected area on the background of the screenshot
 		if (!BitBlt(hdcOutputBuffer, inner.left, inner.top, inner.right - inner.left + 1, inner.bottom - inner.top + 1,
 			hdcScreenshot, inner.left, inner.top, SRCCOPY))
 		{
@@ -2576,8 +2595,8 @@ BOOL OnPaint(HWND hWindow) {
 			DrawText(hdcOutputBuffer, strData, -1, &rectText, DT_SINGLELINE | DT_NOCLIP | DT_CENTER | DT_BOTTOM);
 
 		// Draw mouse position
-		zoomMousePosition(hdcOutputBuffer, BoxFinalPointA);
-		zoomMousePosition(hdcOutputBuffer, BoxFinalPointB);
+		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFinalPointA);
+		zoomMousePosition(hdcOutputBuffer, hdcScreenshot, BoxFinalPointB);
 
 		// Draw text for selection height
 		rectText = { 0, 0, 0, 0 };
