@@ -114,6 +114,7 @@ When abiSnip is started with one of these arguments, this new abiSnip instance e
 abiSnip uses registry values under:
 - [HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run](#hklmsoftwaremicrosoftwindowscurrentversionrun)
 - [HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run](#hkcusoftwaremicrosoftwindowscurrentversionrun)
+- [HKLM\SOFTWARE\codingABI\abiSnip](#hklmsoftwaremicrosoftwindowscurrentversionrun)
 - [HKCU\SOFTWARE\codingABI\abiSnip](#hkcusoftwaremicrosoftwindowscurrentversionrun)
 - [HKLM\SOFTWARE\Policies\codingABI\abiSnip](#group-policy)
 - [HKCU\SOFTWARE\Policies\codingABI\abiSnip](#group-policy)
@@ -131,6 +132,9 @@ abiSnip uses registry values under:
 | abiSnip | REG_SZ or [REG_EXPAND_SZ](#reg_expand_sz) | Full quoted path to abiSnip.exe, for example *"C:\abiSnip\abiSnip.exe"* | Starts abiSnip automatically at logon for the current user |
 
 #### HKCU\SOFTWARE\codingABI\abiSnip
+#### HKLM\SOFTWARE\codingABI\abiSnip
+
+HKCU has a higher priority as HKLM
 
 | Registry value | Type | Content | Description | Can be overwritten by [group policy](#group-policy) |
 | --- | --- | --- | --- | --- |
