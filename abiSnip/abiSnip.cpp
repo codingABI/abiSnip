@@ -78,6 +78,7 @@
 			Add option to disable PrintScreenKeyForSnippingEnabled
             Version update to 1.0.0.5
   20250701, Do not darken zoomed area while selecting first point
+  20250911, Add missing registry search path HKEY_LOCAL_MACHINE in registry
 
 ===================================================================+*/
 
@@ -823,6 +824,9 @@ BOOL getDWORDSettingFromRegistry(APPDWORDSETTINGS setting) {
 	// User registry value
 	if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_CURRENT_USER, REGISTRYSETTINGSPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
 
+	// Machine registry value
+	if (!bFound) bFound = (getDWORDValueFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYSETTINGSPATH, sValueName.c_str(), dwValue) == ERROR_SUCCESS);
+
 	// Failback to GPO default settings, if not found
 	if (!bFound) switch (setting)
 	{
@@ -1083,6 +1087,7 @@ void getScreenshotPathFromRegistry()
 	if (!bFound) bFound = getSZFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYGPOPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
 	if (bFound) g_bScreenshotPathGPO = TRUE;
 	if (!bFound) bFound = getSZFromRegistry(HKEY_CURRENT_USER, REGISTRYSETTINGSPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
+	if (!bFound) bFound = getSZFromRegistry(HKEY_LOCAL_MACHINE, REGISTRYSETTINGSPATH, szRegistryValue, g_screenshotPath, MAX_PATH);
 
 	// Failback value (also check folder to be folder and nothing else, because later we use ShellExecute)
 	if (!bFound || !PathIsDirectory(g_screenshotPath))
