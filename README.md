@@ -132,9 +132,9 @@ abiSnip uses registry values under:
 | abiSnip | REG_SZ or [REG_EXPAND_SZ](#reg_expand_sz) | Full quoted path to abiSnip.exe, for example *"C:\abiSnip\abiSnip.exe"* | Starts abiSnip automatically at logon for the current user |
 
 #### HKCU\SOFTWARE\codingABI\abiSnip
-#### HKLM\SOFTWARE\codingABI\abiSnip
+Same as [HKLM\SOFTWARE\codingABI\abiSnip](#hklmsoftwaremicrosoftwindowscurrentversionrun) and HKCU has a higher priority as HKLM
 
-HKCU has a higher priority as HKLM
+#### HKLM\SOFTWARE\codingABI\abiSnip
 
 | Registry value | Type | Content | Description | Can be overwritten by [group policy](#group-policy) |
 | --- | --- | --- | --- | --- |
