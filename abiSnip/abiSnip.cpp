@@ -79,6 +79,7 @@
             Version update to 1.0.0.5
   20250701, Do not darken zoomed area while selecting first point
   20250911, Add missing registry search path HKEY_LOCAL_MACHINE in registry
+  20250926, Replace PathRemoveFileSpec with PathCchRemoveFileSpec
 
 ===================================================================+*/
 
@@ -94,6 +95,7 @@
 #include <windows.h>
 #include <WindowsX.h>
 #include <wingdi.h>
+#include <pathcch.h>
 #include <shlwapi.h>
 #include <shlobj.h>
 #include <gdiplus.h>
@@ -109,6 +111,7 @@
 // Library-search records for visual studio
 #pragma comment(lib,"msimg32")
 #pragma comment(lib,"Shlwapi")
+#pragma comment(lib,"Pathcch")
 #pragma comment(lib,"Gdiplus")
 #pragma comment(lib,"Version")
 #pragma comment(lib,"Comctl32")
@@ -1099,7 +1102,7 @@ void getScreenshotPathFromRegistry()
 		{
 			// Use path of EXE file
 			GetModuleFileName(NULL, g_screenshotPath, MAX_PATH);
-			PathRemoveFileSpec(g_screenshotPath);
+			PathCchRemoveFileSpec(g_screenshotPath,MAX_PATH);
 		}
 	}
 }
