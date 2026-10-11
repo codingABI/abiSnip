@@ -20,7 +20,7 @@
 			 Program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2
 
   License: CC0
-  Copyright (c) 2024-2025 codingABI
+  Copyright (c) 2024-2026 codingABI
 
   Commands:
   Print screen = Start screenshot
@@ -80,7 +80,8 @@
   20250701, Do not darken zoomed area while selecting first point
   20250911, Add missing registry search path HKEY_LOCAL_MACHINE in registry
   20250926, Replace PathRemoveFileSpec with PathCchRemoveFileSpec
-
+  20261011, Refresh keyboard hook every second to prevent "hook stealing", 
+            Version update to 1.0.0.6
 ===================================================================+*/
 
 // For GNU compilers
@@ -263,9 +264,10 @@ bool IsWindows11_24H2OrNewer() {
 -----------------------------------------------------------------F-F*/
 LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-	if (nCode == HC_ACTION)
+	if ((nCode == HC_ACTION) && (wParam==WM_KEYDOWN))
 	{
 		KBDLLHOOKSTRUCT* pKeyBoard = (KBDLLHOOKSTRUCT*)lParam;
+
 		if (pKeyBoard->vkCode == VK_SNAPSHOT)
 		{
 			if (g_appState == stateTrayIcon) SendMessage(g_hWindow, WM_STARTED, 0, 0);
@@ -287,7 +289,12 @@ LRESULT CALLBACK KeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 -----------------------------------------------------------------F-F*/
 void SetHook()
 {
-	g_hHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+	HHOOK hNewHook = SetWindowsHookEx(WH_KEYBOARD_LL, KeyboardProc, NULL, 0);
+
+	HHOOK hOldHook = g_hHook;
+	g_hHook = hNewHook;
+	if (hOldHook)
+		UnhookWindowsHookEx(hOldHook);
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -3625,7 +3632,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 		checkPrintScreenKeyForSnipping(g_hWindow);
 
+		// Set keyboard hook and refresh hook every second to prevent "hook stealing"
 		SetHook();
+		SetTimer(g_hWindow, IDT_TIMERHOOKREFRESH, 1000, (TIMERPROC)NULL);
 	}
 
 	// Main message loop:
@@ -3637,6 +3646,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 	if (!g_onetimeCapture) // If not onetimeCapture mode
 	{
+		KillTimer(g_hWindow, IDT_TIMERHOOKREFRESH);
 		ReleaseHook();
 		// Remove tray icon entry
 		Shell_NotifyIcon(NIM_DELETE, &g_nid);
@@ -4011,6 +4021,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		case IDT_TIMERSCREENSHOTDELAYED: // Onetime 5s timer
 			KillTimer(hWnd, IDT_TIMERSCREENSHOTDELAYED); // Only one time
 			SendMessage(hWnd, WM_STARTED, 0, 0);
+			break;
+		case IDT_TIMERHOOKREFRESH:
+			SetHook();
 			break;
 		}
 	case WM_COMMAND: // Menu selection

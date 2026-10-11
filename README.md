@@ -58,7 +58,7 @@ The tray icon has a context menu for common functions
 ![Context menu](assets/images/TrayIconContextMenu.png)
 
 ## License and copyright
-This project is licensed under the terms of the CC0 [Copyright (c) 2024-2025 codingABI](LICENSE).
+This project is licensed under the terms of the CC0 [Copyright (c) 2024-2026 codingABI](LICENSE).
 
 ## Appendix
 

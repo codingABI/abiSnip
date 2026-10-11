@@ -5,6 +5,7 @@
 
 #define IDT_TIMER1000MS                  1015
 #define IDT_TIMERSCREENSHOTDELAYED       1016
+#define IDT_TIMERHOOKREFRESH             1017
 
 // Strings
 #define IDS_APP_TITLE 6000
