@@ -80,8 +80,9 @@
   20250701, Do not darken zoomed area while selecting first point
   20250911, Add missing registry search path HKEY_LOCAL_MACHINE in registry
   20250926, Replace PathRemoveFileSpec with PathCchRemoveFileSpec
-  20261011, Refresh keyboard hook every second to prevent "hook stealing", 
+  20261011, Refresh keyboard hook every second to prevent "hook stealing" (Horizon Client,...) 
             Version update to 1.0.0.6
+			Fix display information offset, when primary monitor has an offset
 ===================================================================+*/
 
 // For GNU compilers
@@ -2762,14 +2763,15 @@ BOOL OnPaint(HWND hWindow) {
 		int height = (rectTextArea.bottom - rectTextArea.top + 1);
 		int width = (rectTextArea.right - rectTextArea.left + 1) + 1;
 
-		rectTextArea.left = 10;
-		rectTextArea.top = 10;
+		rectTextArea.left = 10 - g_appWindowPos.x;
+		rectTextArea.top = 10 - g_appWindowPos.y;
+
 		rectTextArea.bottom = rectTextArea.top + height - 1;
 		rectTextArea.right = rectTextArea.left + width - 1;
 
 		textFormat = 0;
-		POINT pos = { rectTextArea.left, rectTextArea.top };
-		HMONITOR hMonitor = MonitorFromPoint(pos, MONITOR_DEFAULTTONULL);
+		POINT nullPosition = { 0, 0 }; // Display information should alway be on the primary monitor (monitor with 0,0) 
+		HMONITOR hMonitor = MonitorFromPoint(nullPosition, MONITOR_DEFAULTTONULL);
 		if (hMonitor != NULL)
 		{
 			MONITORINFO mi;
@@ -2779,16 +2781,16 @@ BOOL OnPaint(HWND hWindow) {
 				{
 				case stateFirstPoint:
 				case statePointA:
-					if (g_selection.left < mi.rcMonitor.right / 2) {
+					if (g_selection.left + g_appWindowPos.x < mi.rcMonitor.right / 2) {
 						textFormat = DT_RIGHT;
-						rectTextArea.left = mi.rcMonitor.right - width - 10;
+						rectTextArea.left = mi.rcMonitor.right - width - 10 - g_appWindowPos.x;
 						rectTextArea.right = rectTextArea.left + width + 1;
 					}
 					break;
 				case statePointB:
-					if (g_selection.right < mi.rcMonitor.right / 2) {
+					if (g_selection.right + g_appWindowPos.x < mi.rcMonitor.right / 2) {
 						textFormat = DT_RIGHT;
-						rectTextArea.left = mi.rcMonitor.right - width - 10;
+						rectTextArea.left = mi.rcMonitor.right - width - 10 - g_appWindowPos.x;
 						rectTextArea.right = rectTextArea.left + width + 1;
 					}
 					break;
