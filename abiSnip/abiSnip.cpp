@@ -82,7 +82,8 @@
   20250926, Replace PathRemoveFileSpec with PathCchRemoveFileSpec
   20261011, Refresh keyboard hook every second to prevent "hook stealing" (Horizon Client,...) 
             Version update to 1.0.0.6
-			Fix display information offset, when primary monitor has an offset
+  20261013, Fix display information offset, when primary monitor has an offset
+            Readd PathRemoveFileSpec for old TDM-GCC-64 compiler 
 ===================================================================+*/
 
 // For GNU compilers
@@ -1110,7 +1111,12 @@ void getScreenshotPathFromRegistry()
 		{
 			// Use path of EXE file
 			GetModuleFileName(NULL, g_screenshotPath, MAX_PATH);
+			// My TDM-GCC-64 has no libpathcch.a
+			#if defined (__GNUC__)
+			PathRemoveFileSpec(g_screenshotPath);
+			#else
 			PathCchRemoveFileSpec(g_screenshotPath,MAX_PATH);
+			#endif
 		}
 	}
 }
