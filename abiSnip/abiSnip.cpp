@@ -84,6 +84,7 @@
             Version update to 1.0.0.6
   20261013, Fix display information offset, when primary monitor has an offset
             Readd PathRemoveFileSpec for old TDM-GCC-64 compiler 
+  20261024, Add retry if clipboard is locked
 ===================================================================+*/
 
 // For GNU compilers
@@ -447,6 +448,7 @@ void showProgramInformation(HWND hWindow)
 {
 	std::wstring sTitle(LoadStringAsWstr(g_hInst, IDS_APP_TITLE));
 	std::wstring sMessage(LoadStringAsWstr(g_hInst, IDS_PROGINFO));
+
 	wchar_t szExecutable[MAX_PATH];
 	if (GetModuleFileName(NULL, szExecutable, MAX_PATH) == 0) return;
 
@@ -503,6 +505,7 @@ void showProgramInformation(HWND hWindow)
 	config.hwndParent = hWindow;
 	config.dwCommonButtons = TDCBF_OK_BUTTON;
 	config.pszMainIcon = MAKEINTRESOURCE(IDI_ICON);
+	config.pszWindowTitle = szExecutable;
 	config.pszMainInstruction = sTitle.c_str();
 	config.pszContent = sMessage.c_str();
 	config.pszFooter = L"<A HREF=\"https://github.com/codingABI/abiSnip\">https://github.com/codingABI/abiSnip</A>";
@@ -1609,7 +1612,14 @@ BOOL saveSelection(HWND hWindow)
 
 		if (g_saveToClipboard) // Save selected area to clipboard?
 		{
-			if (OpenClipboard(NULL))
+			BOOL bRC = FALSE;
+		    for (int i = 0; i < 5; ++i) // Retry loop, if clipboard is blocked by another process 
+    		{
+    			bRC = OpenClipboard(NULL);
+        		if (bRC) break;
+        		Sleep(20);
+		    }
+			if (bRC)
 			{
 				EmptyClipboard(); // Clear clipboard
 

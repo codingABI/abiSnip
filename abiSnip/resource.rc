@@ -49,7 +49,7 @@ END
 STRINGTABLE
 BEGIN
 	IDS_SETFOLDER               "Change folder..."
-	IDS_PROGINFO                "Tool to create screenshots\n©2024-2026 codingABI"
+	IDS_PROGINFO                "Tool to create screenshots\n\n©2024-2026 codingABI"
 	IDS_SAVETOCLIPBOARD         "Save to cipboard"
 	IDS_SAVETOFILE              "Save to file"
 	IDS_TARGETSDISABLED         "All screenshot destinations are disabled"
@@ -92,7 +92,7 @@ END
 STRINGTABLE
 BEGIN
 	IDS_SETFOLDER               "Ordner ändern..."
-	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n©2024-2026 codingABI"
+	IDS_PROGINFO                "Tool zum Erstellen von Screenshots\n\n©2024-2026 codingABI"
 	IDS_SAVETOCLIPBOARD         "In Zwischenablage speichern"
 	IDS_SAVETOFILE              "In Datei speichern"
 	IDS_TARGETSDISABLED         "Alle Speicherziele sind deaktiviert"
