@@ -85,6 +85,7 @@
   20261013, Fix display information offset, when primary monitor has an offset
             Readd PathRemoveFileSpec for old TDM-GCC-64 compiler 
   20261024, Add retry if clipboard is locked
+  20261101, Dark mode support for context menu
 ===================================================================+*/
 
 // For GNU compilers
@@ -1189,6 +1190,28 @@ void changeScreenshotPathAndStorePathToRegistry()
 }
 
 /*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  Function: IsDarkModeEnabled
+
+  Summary:   Dark mode enabled?
+
+  Args:     
+
+  Returns:  BOOL
+			  TRUE = Dark mode
+			  FALSE = Light mode
+
+-----------------------------------------------------------------F-F*/
+BOOL IsDarkModeEnabled()
+{
+	DWORD value = 1; // Standard = Light
+	if (getDWORDValueFromRegistry( HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme",value) == ERROR_SUCCESS)
+	{
+		if (value == 0) return TRUE; // Dark mode
+	}
+    return FALSE;
+}
+
+/*F+F+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   Function: GetEncoderClsid
 
   Summary:   Get encoder CLsid for a mime type string
@@ -1613,25 +1636,31 @@ BOOL saveSelection(HWND hWindow)
 		if (g_saveToClipboard) // Save selected area to clipboard?
 		{
 			BOOL bRC = FALSE;
-		    for (int i = 0; i < 5; ++i) // Retry loop, if clipboard is blocked by another process 
-    		{
-    			bRC = OpenClipboard(NULL);
-        		if (bRC) break;
-        		Sleep(20);
-		    }
-			if (bRC)
-			{
-				EmptyClipboard(); // Clear clipboard
+			BOOL bFinished = FALSE;
+			while (!bFinished) {
+				for (int i = 0; i < 5; ++i) // Retry loop, if clipboard is blocked by another process 
+				{
+					bRC = OpenClipboard(NULL);
+					if (bRC) break;
+					Sleep(20);
+				}
 
-				// Set bitmap to clipboard
-				SetClipboardData(CF_BITMAP, hBitmap);
+				if (bRC)
+				{
+					EmptyClipboard(); // Clear clipboard
 
-				CloseClipboard(); // Close clipboard
-			}
-			else
-			{
-				// Clipboard error
-				MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_ERRORCOPYTOCLIPBOARD).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_OK | MB_ICONERROR);
+					// Set bitmap to clipboard
+					SetClipboardData(CF_BITMAP, hBitmap);
+
+					CloseClipboard(); // Close clipboard
+					bFinished = true;
+				}
+				else
+				{
+					// Clipboard error
+					if (MessageBox(hWindow, LoadStringAsWstr(g_hInst, IDS_ERRORCOPYTOCLIPBOARD).c_str(), LoadStringAsWstr(g_hInst, IDS_APP_TITLE).c_str(), MB_RETRYCANCEL | MB_ICONERROR) == IDCANCEL)
+						bFinished = true;
+				}
 			}
 		}
 
@@ -3653,6 +3682,25 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		// Set keyboard hook and refresh hook every second to prevent "hook stealing"
 		SetHook();
 		SetTimer(g_hWindow, IDT_TIMERHOOKREFRESH, 1000, (TIMERPROC)NULL);
+	}
+
+	if (IsDarkModeEnabled()) // Dark mode for context menu
+	{
+		enum class PreferredAppMode
+		{
+			Default,
+			AllowDark,
+			ForceDark,
+			ForceLight,
+			Max
+		};
+		typedef PreferredAppMode (WINAPI* SetPreferredAppMode_t)(PreferredAppMode); // ordinal 135
+		HMODULE hUxtheme = LoadLibraryExW(L"uxtheme.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+		if (hUxtheme) {
+			SetPreferredAppMode_t SetPreferredAppMode;
+			SetPreferredAppMode = (SetPreferredAppMode_t)GetProcAddress(hUxtheme, MAKEINTRESOURCEA(135));
+			SetPreferredAppMode(PreferredAppMode::ForceDark);
+		}
 	}
 
 	// Main message loop:

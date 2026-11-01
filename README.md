@@ -1,4 +1,5 @@
-# abiSnip
+# abiSnip ![Icon](abiSnip/abiSnip.ico)
+
 C/C++ project for a classic screenshot tool to save screenshots as PNG files or copy to clipboard when the "Print screen" key was pressed. The [code](abiSnip/abiSnip.cpp) works without special frameworks and uses only the Win32-API. The program should run on Windows 11/10/8.1/2025/2022/2019/2016/2012R2.
 
 Watch version 1.0.0.1 on [Youtube](https://youtu.be/wQBMCGwqIpA)
